@@ -10,6 +10,7 @@ venv_backend/
 frontend/node_modules/
 frontend/dist/
 output/
+.worktrees/
 
 .env
 .DS_Store
