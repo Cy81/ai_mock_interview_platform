@@ -5,6 +5,7 @@ __pycache__/
 venv/
 venv_backend/
 *.db
+*.db.*
 
 frontend/node_modules/
 frontend/dist/
