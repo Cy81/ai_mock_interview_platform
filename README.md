@@ -184,3 +184,4 @@ cmd /c npm run build
 8. `08_前端工程.md`: Vue 企业后台页面组织
 9. `09_部署与测试.md`: 测试、构建、Docker 和生产检查清单
 10. `10_扩展作业.md`: 可继续迭代的企业级功能
+11. `11_Git与Docker实战教程.md`: Git 提交推送、GitHub 远程仓库、Docker Compose 部署和排错
