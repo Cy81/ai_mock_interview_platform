@@ -9,6 +9,7 @@ venv_backend/
 
 frontend/node_modules/
 frontend/dist/
+output/
 
 .env
 .DS_Store
