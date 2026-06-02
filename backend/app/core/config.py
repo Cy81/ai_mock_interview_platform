@@ -114,6 +114,17 @@ class Settings(BaseSettings):
     DEFAULT_ADMIN_NAME: str = "系统管理员"
 
     # ============= 校验 =============
+    @field_validator("DEBUG", mode="before")
+    @classmethod
+    def parse_debug_mode(cls, v):
+        if isinstance(v, str):
+            value = v.strip().lower()
+            if value in {"release", "prod", "production"}:
+                return False
+            if value in {"debug", "dev", "development"}:
+                return True
+        return v
+
     @field_validator("CORS_ORIGINS", mode="before")
     @classmethod
     def split_csv_origins(cls, v):
