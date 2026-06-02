@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 
+import pytest
+from pydantic import ValidationError
+
 from app.services.interview_agents.events import format_sse
 from app.services.interview_agents.models import (
     FollowupAction,
@@ -63,3 +66,70 @@ def test_agent_models_validate_core_shapes() -> None:
     assert question.reference_chunk_ids == [1, 2]
     assert followup.action == FollowupAction.COMMENT
     assert score.overall_score == 82.5
+
+
+def test_agent_models_trim_and_limit_list_validators() -> None:
+    plan = InterviewPlan(
+        target_type="formal",
+        difficulty="intermediate",
+        core_skills=[
+            " FastAPI ",
+            "",
+            " RAG ",
+            " ",
+            "Python",
+            "SQL",
+            "Docker",
+            "Vue",
+            "Redis",
+            "Celery",
+            "LangChain",
+        ],
+    )
+    question = GeneratedQuestion(
+        position=1,
+        skill="FastAPI",
+        question="Explain dependency injection in FastAPI projects.",
+        rubric=[
+            " Explain principles ",
+            "",
+            "Use project examples",
+            " ",
+            "Discuss testing",
+            "Mention monitoring",
+            "Cover fallbacks",
+            "Describe tradeoffs",
+            "Extra item",
+        ],
+    )
+
+    assert plan.core_skills == [
+        "FastAPI",
+        "RAG",
+        "Python",
+        "SQL",
+        "Docker",
+        "Vue",
+        "Redis",
+        "Celery",
+    ]
+    assert question.rubric == [
+        "Explain principles",
+        "Use project examples",
+        "Discuss testing",
+        "Mention monitoring",
+        "Cover fallbacks",
+        "Describe tradeoffs",
+    ]
+
+
+def test_agent_models_reject_out_of_range_scores() -> None:
+    with pytest.raises(ValidationError):
+        FollowupResult(
+            action=FollowupAction.COMMENT,
+            content="Needs more detail.",
+            confidence=1.01,
+        )
+
+    with pytest.raises(ValidationError):
+        ScoreResult(overall_score=100.01, level="out of range")
