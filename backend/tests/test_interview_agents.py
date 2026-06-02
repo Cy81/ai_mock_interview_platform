@@ -13,6 +13,24 @@ from app.services.interview_agents.models import (
     InterviewPlan,
     ScoreResult,
 )
+from app.services.interview_agents.runtime import get_interview_agent_runtime
+
+
+def test_mock_runtime_generates_questions_with_langchain_facade() -> None:
+    runtime = get_interview_agent_runtime()
+    questions, meta = runtime.generate_interview_questions(
+        job_title="AI 应用工程师",
+        job_competency={"skills": ["FastAPI", "RAG"]},
+        profile={"years": 1, "skills": ["FastAPI", "LangChain"]},
+        contexts=[{"id": 101, "title": "FastAPI 题库", "content": "请解释依赖注入。"}],
+        count=3,
+    )
+
+    assert meta.model == "langchain-mock"
+    assert len(questions) == 3
+    assert questions[0]["position"] == 1
+    assert questions[0]["skill"] in {"FastAPI", "LangChain"}
+    assert questions[0]["rubric"]
 
 
 def test_format_sse_serializes_json_payload() -> None:
