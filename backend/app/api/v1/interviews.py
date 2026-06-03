@@ -1,12 +1,16 @@
-"""客户端：面试路由 (/api/v1/interviews/*)。"""
+"""Interview routes for /api/v1/interviews/*."""
 from __future__ import annotations
+
+from typing import Literal
 
 from fastapi import APIRouter, Depends, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
+from app.core.exceptions import DomainError
 from app.db.session import get_db
+from app.models.resume import Resume
 from app.models.user import User
 from app.schemas.common import Message, Page
 from app.schemas.interview import (
@@ -17,6 +21,9 @@ from app.schemas.interview import (
 )
 from app.services import interview_service
 from app.services.ai_provider import get_ai_provider
+from app.services.interview_agents.events import error_event, format_sse
+from app.services.interview_agents.runtime import get_interview_agent_runtime
+from app.services.rag_service import search
 
 
 router = APIRouter(prefix="/interviews", tags=["面试"])
@@ -136,6 +143,37 @@ def delete_interview(
 
 
 @router.get(
+    "/{interview_id}/stream",
+    summary="结构化面试流（SSE）",
+    response_class=StreamingResponse,
+)
+def stream_interview(
+    interview_id: int,
+    mode: Literal["followup", "scoring"] = "followup",
+    question_id: int | None = None,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    interview = interview_service.get_interview(db, user, interview_id)
+
+    def event_stream():
+        try:
+            if mode == "followup":
+                yield from _stream_followup_events(
+                    db=db,
+                    interview=interview,
+                    question_id=question_id,
+                )
+            else:
+                yield from _stream_scoring_events(db=db, user=user, interview_id=interview_id)
+        except Exception as exc:  # defensive stream guard
+            yield error_event(str(exc), stage=mode, interview_id=interview_id)
+            yield format_sse("done", {"interview_id": interview_id})
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+@router.get(
     "/{interview_id}/answer/stream",
     summary="流式追问（SSE，演示）",
     response_class=StreamingResponse,
@@ -148,11 +186,9 @@ def stream_answer(
     interview = interview_service.get_interview(db, user, interview_id)
     questions = sorted(interview.questions, key=lambda q: q.position)
     if not questions:
-        from app.core.exceptions import DomainError
-
         raise DomainError("面试还没有题目")
 
-    system = "你是技术面试官，请给候选人一段简短的引导和澄清，不超过 80 字。"
+    system = "你是技术面试官，请给候选人一段简短的引导和澄清，不超过80字。"
     user_prompt = f"岗位：{interview.job_title}\n首题：{questions[0].question}"
 
     def event_stream():
@@ -161,3 +197,103 @@ def stream_answer(
         yield "event: done\ndata: [DONE]\n\n"
 
     return StreamingResponse(event_stream(), media_type="text/event-stream")
+
+
+def _stream_followup_events(
+    *,
+    db: Session,
+    interview,
+    question_id: int | None,
+):
+    if question_id is None:
+        raise DomainError("followup mode requires question_id")
+
+    question = next((item for item in interview.questions if item.id == question_id), None)
+    if not question:
+        raise DomainError("题目不存在或不属于当前面试")
+
+    answer = question.answer
+    if not answer:
+        raise DomainError("该题尚未提交答案")
+
+    resume = db.get(Resume, interview.resume_id)
+    profile = (resume.parsed_profile if resume else {}) or {}
+    knowledge_contexts = [
+        hit.to_context()
+        for hit in search(
+            db,
+            "question_bank",
+            f"{interview.job_title} {question.question}",
+            top_k=5,
+        )
+    ]
+
+    yield format_sse(
+        "followup_started",
+        {
+            "interview_id": interview.id,
+            "question_id": question.id,
+            "answer_id": answer.id,
+        },
+    )
+
+    chunks: list[str] = []
+    for token in get_interview_agent_runtime().stream_followup(
+        interview_id=interview.id,
+        question_id=question.id,
+        answer=answer.answer,
+        job_title=interview.job_title,
+        profile=profile,
+        question={
+            "id": question.id,
+            "position": question.position,
+            "type": question.type.value,
+            "difficulty": question.difficulty.value,
+            "skill": question.skill,
+            "question": question.question,
+            "rubric": question.rubric,
+            "reference_chunk_ids": question.reference_chunk_ids,
+        },
+        knowledge_contexts=knowledge_contexts,
+    ):
+        chunks.append(token)
+        yield format_sse(
+            "followup_delta",
+            {
+                "interview_id": interview.id,
+                "question_id": question.id,
+                "content": token,
+            },
+        )
+
+    final_content = "".join(chunks)
+    yield format_sse(
+        "followup_done",
+        {
+            "interview_id": interview.id,
+            "question_id": question.id,
+            "content": final_content,
+        },
+    )
+    yield format_sse("done", {"interview_id": interview.id})
+
+
+def _stream_scoring_events(*, db: Session, user: User, interview_id: int):
+    yield format_sse("scoring_started", {"interview_id": interview_id})
+    interview = interview_service.finish_interview(db, user, interview_id)
+    yield format_sse(
+        "scoring_done",
+        {
+            "interview_id": interview.id,
+            "status": interview.status.value,
+            "overall_score": interview.overall_score,
+        },
+    )
+    yield format_sse(
+        "report_ready",
+        {
+            "interview_id": interview.id,
+            "report": interview.score_report,
+        },
+    )
+    yield format_sse("done", {"interview_id": interview.id})
