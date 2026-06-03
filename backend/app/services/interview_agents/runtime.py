@@ -44,8 +44,26 @@ class InterviewAgentRuntime:
             count=count,
         )
 
-    def stream_followup(self, **kwargs: Any):
-        return self.followup.stream(**kwargs)
+    def stream_followup(
+        self,
+        *,
+        interview_id: int,
+        question_id: int,
+        answer: str,
+        job_title: str,
+        profile: dict[str, Any],
+        question: dict[str, Any],
+        knowledge_contexts: list[dict[str, Any]],
+    ):
+        return self.followup.stream(
+            interview_id=interview_id,
+            question_id=question_id,
+            answer=answer,
+            job_title=job_title,
+            profile=profile,
+            question=question,
+            knowledge_contexts=knowledge_contexts,
+        )
 
     def score_interview(
         self,

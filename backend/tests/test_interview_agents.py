@@ -5,14 +5,20 @@ import json
 import pytest
 from pydantic import ValidationError
 
+import app.services.interview_agents.llm as agent_llm
+import app.services.interview_agents.question_generator as question_generator
+from app.services.ai_provider import LLMResponse
 from app.services.interview_agents.events import format_sse
 from app.services.interview_agents.models import (
     FollowupAction,
     FollowupResult,
     GeneratedQuestion,
     InterviewPlan,
+    QuestionGenerationResult,
     ScoreResult,
 )
+from app.services.interview_agents.planner import InterviewPlannerAgent
+from app.services.interview_agents.question_generator import QuestionGenerationAgent
 from app.services.interview_agents.runtime import get_interview_agent_runtime
 
 
@@ -31,6 +37,76 @@ def test_mock_runtime_generates_questions_with_langchain_facade() -> None:
     assert questions[0]["position"] == 1
     assert questions[0]["skill"] in {"FastAPI", "LangChain"}
     assert questions[0]["rubric"]
+
+
+def test_deepseek_chat_model_requires_deepseek_api_key(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-fallback")
+    monkeypatch.setattr(agent_llm.settings, "AI_RUNTIME", "deepseek")
+    monkeypatch.setattr(agent_llm.settings, "DEEPSEEK_API_KEY", None)
+
+    with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY is not configured"):
+        agent_llm.get_chat_model()
+
+
+def test_deepseek_question_generation_limits_result_to_requested_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(question_generator.settings, "AI_RUNTIME", "deepseek")
+    plan = InterviewPlan(
+        target_type="intern",
+        difficulty="basic",
+        core_skills=["FastAPI"],
+    )
+    generated = [
+        GeneratedQuestion(
+            position=position,
+            type="technical",
+            difficulty="basic",
+            skill="FastAPI",
+            question=f"请解释 FastAPI 测试策略 {position}。",
+            rubric=["解释核心原理"],
+        )
+        for position in range(1, 4)
+    ]
+
+    def fake_invoke_structured(*args, **kwargs):
+        _prompt, output_model, variables = args
+        assert output_model is QuestionGenerationResult
+        assert variables["count"] == 2
+        return (
+            QuestionGenerationResult(plan=plan, questions=generated),
+            LLMResponse(content="[fake-deepseek]", model="deepseek-chat"),
+        )
+
+    monkeypatch.setattr(question_generator, "invoke_structured", fake_invoke_structured)
+
+    questions, meta = QuestionGenerationAgent().generate(
+        plan=plan,
+        job_title="AI 应用工程师",
+        job_competency={"skills": ["FastAPI"]},
+        profile={"years": 1, "skills": ["FastAPI"]},
+        contexts=[],
+        count=2,
+    )
+
+    assert meta.model == "deepseek-chat"
+    assert len(questions) == 2
+    assert questions[-1]["position"] == 2
+
+
+def test_mock_planner_treats_invalid_years_as_intern() -> None:
+    plan = InterviewPlannerAgent().plan(
+        job_title="AI 应用工程师",
+        job_competency={"skills": ["FastAPI"]},
+        profile={"years": "unknown", "skills": ["FastAPI"]},
+        contexts=[],
+        count=2,
+    )
+
+    assert plan.target_type == "intern"
+    assert plan.difficulty == "basic"
 
 
 def test_format_sse_serializes_json_payload() -> None:

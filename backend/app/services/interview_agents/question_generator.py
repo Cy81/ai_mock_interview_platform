@@ -53,7 +53,7 @@ class QuestionGenerationAgent:
                 "count": count,
             },
         )
-        return [question.model_dump(mode="json") for question in result.questions], meta
+        return [question.model_dump(mode="json") for question in result.questions[:count]], meta
 
     def _mock_generate(
         self,

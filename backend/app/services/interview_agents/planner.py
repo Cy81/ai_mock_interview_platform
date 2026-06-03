@@ -55,7 +55,7 @@ class InterviewPlannerAgent:
         profile: dict[str, Any],
         count: int,
     ) -> InterviewPlan:
-        years = profile.get("years") or 0
+        years = _coerce_years(profile.get("years"))
         target_type = "intern" if years <= 1 else "formal"
         difficulty = "basic" if target_type == "intern" else "intermediate"
         skills = _extract_skills(profile) or _extract_skills(job_competency) or ["Python"]
@@ -78,3 +78,16 @@ def _extract_skills(data: dict[str, Any]) -> list[str]:
     if not isinstance(skills, list):
         return []
     return [str(skill).strip() for skill in skills if str(skill).strip()]
+
+
+def _coerce_years(value: Any) -> float:
+    if isinstance(value, bool):
+        return 0
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError:
+            return 0
+    return 0

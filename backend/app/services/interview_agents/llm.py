@@ -19,6 +19,9 @@ def get_chat_model() -> Any | None:
     if settings.AI_RUNTIME != "deepseek":
         return None
 
+    if not settings.DEEPSEEK_API_KEY:
+        raise RuntimeError("DEEPSEEK_API_KEY is not configured")
+
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(
