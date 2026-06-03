@@ -215,6 +215,10 @@ async function createInterview() {
 }
 
 function resetAiFeedback() {
+  if (streamController) {
+    streamController.abort()
+    streamController = null
+  }
   aiFeedback.loading = false
   aiFeedback.content = ''
   aiFeedback.error = ''
@@ -224,7 +228,8 @@ function resetAiFeedback() {
 async function runFollowupStream(questionId) {
   if (!current.value || !questionId) return
   if (streamController) streamController.abort()
-  streamController = new AbortController()
+  const controller = new AbortController()
+  streamController = controller
   aiFeedback.loading = true
   aiFeedback.content = ''
   aiFeedback.error = ''
@@ -232,7 +237,7 @@ async function runFollowupStream(questionId) {
   try {
     await interviewApi.stream(current.value.id, {
       params: { mode: 'followup', question_id: questionId },
-      signal: streamController.signal,
+      signal: controller.signal,
       onEvent: ({ event, data }) => {
         aiFeedback.event = event
         if (event === 'followup_delta') aiFeedback.content += data.content || ''
@@ -241,10 +246,12 @@ async function runFollowupStream(questionId) {
       },
     })
   } catch (err) {
-    if (err.name !== 'AbortError') aiFeedback.error = err?.message || 'AI 追问生成失败'
+    if (err?.name !== 'AbortError') aiFeedback.error = err?.message || 'AI 追问生成失败'
   } finally {
-    aiFeedback.loading = false
-    streamController = null
+    if (streamController === controller) {
+      aiFeedback.loading = false
+      streamController = null
+    }
   }
 }
 
