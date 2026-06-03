@@ -37,6 +37,12 @@ const finishing = ref(false)
 const creating = ref(false)
 const loading = ref(false)
 const sidebarLoading = ref(false)
+const aiFeedback = reactive({
+  loading: false,
+  content: '',
+  error: '',
+  event: '',
+})
 
 const form = reactive({
   resume_id: route.query.resume_id ? Number(route.query.resume_id) : '',
@@ -84,6 +90,7 @@ const canFinish = computed(
 
 let timer = null
 let questionStartedAt = Date.now()
+let streamController = null
 
 function formatElapsed(s) {
   const m = String(Math.floor(s / 60)).padStart(2, '0')
@@ -157,6 +164,7 @@ async function pickInterview(item) {
   try {
     current.value = await interviewApi.get(item.id)
     currentIndex.value = 0
+    resetAiFeedback()
     await nextTick()
     startTimer()
     loadDraft()
@@ -195,6 +203,7 @@ async function createInterview() {
     interviews.value = [created, ...interviews.value]
     current.value = created
     currentIndex.value = 0
+    resetAiFeedback()
     await nextTick()
     startTimer()
     loadDraft()
@@ -202,6 +211,40 @@ async function createInterview() {
     ElMessage.error(err?.message || '创建失败')
   } finally {
     creating.value = false
+  }
+}
+
+function resetAiFeedback() {
+  aiFeedback.loading = false
+  aiFeedback.content = ''
+  aiFeedback.error = ''
+  aiFeedback.event = ''
+}
+
+async function runFollowupStream(questionId) {
+  if (!current.value || !questionId) return
+  if (streamController) streamController.abort()
+  streamController = new AbortController()
+  aiFeedback.loading = true
+  aiFeedback.content = ''
+  aiFeedback.error = ''
+  aiFeedback.event = 'followup_started'
+  try {
+    await interviewApi.stream(current.value.id, {
+      params: { mode: 'followup', question_id: questionId },
+      signal: streamController.signal,
+      onEvent: ({ event, data }) => {
+        aiFeedback.event = event
+        if (event === 'followup_delta') aiFeedback.content += data.content || ''
+        if (event === 'followup_done') aiFeedback.content = data.content || aiFeedback.content
+        if (event === 'error') aiFeedback.error = data.message || 'AI 追问生成失败'
+      },
+    })
+  } catch (err) {
+    if (err.name !== 'AbortError') aiFeedback.error = err?.message || 'AI 追问生成失败'
+  } finally {
+    aiFeedback.loading = false
+    streamController = null
   }
 }
 
@@ -220,15 +263,11 @@ async function submitAnswer() {
       answer: text,
       duration_ms: duration,
     })
+    const answeredQuestionId = currentQuestion.value.id
     current.value = updated
-    localStorage.removeItem(draftKey(current.value.id, currentQuestion.value.id))
+    localStorage.removeItem(draftKey(current.value.id, answeredQuestionId))
     ElMessage.success('已提交')
-    if (currentIndex.value < sortedQuestions.value.length - 1) {
-      currentIndex.value += 1
-      await nextTick()
-      startTimer()
-      loadDraft()
-    }
+    await runFollowupStream(answeredQuestionId)
   } catch (err) {
     ElMessage.error(err?.message || '提交失败')
   } finally {
@@ -240,6 +279,7 @@ function go(delta) {
   const next = currentIndex.value + delta
   if (next < 0 || next >= sortedQuestions.value.length) return
   currentIndex.value = next
+  resetAiFeedback()
   startTimer()
   loadDraft()
 }
@@ -300,6 +340,7 @@ watch(
       try {
         current.value = await interviewApi.get(Number(id))
         currentIndex.value = 0
+        resetAiFeedback()
         startTimer()
         loadDraft()
       } catch (err) {
@@ -323,7 +364,10 @@ onMounted(async () => {
   }
 })
 
-onUnmounted(stopTimer)
+onUnmounted(() => {
+  stopTimer()
+  if (streamController) streamController.abort()
+})
 </script>
 
 <template>
@@ -509,6 +553,19 @@ onUnmounted(stopTimer)
               </span>
             </div>
 
+            <div
+              v-if="aiFeedback.loading || aiFeedback.content || aiFeedback.error"
+              class="ai-feedback"
+            >
+              <div class="ai-feedback-head">
+                <span>AI 面试官反馈</span>
+                <el-tag v-if="aiFeedback.loading" size="small" type="warning">生成中</el-tag>
+                <el-tag v-else size="small" type="success">已生成</el-tag>
+              </div>
+              <p v-if="aiFeedback.content">{{ aiFeedback.content }}</p>
+              <p v-if="aiFeedback.error" class="ai-feedback-error">{{ aiFeedback.error }}</p>
+            </div>
+
             <div class="qa-actions">
               <el-button :icon="ChevronLeft" :disabled="currentIndex === 0" @click="go(-1)">
                 上一题
@@ -582,6 +639,31 @@ onUnmounted(stopTimer)
   margin-top: 10px; padding: 8px 12px; border-radius: 8px;
   background: #ecfdf5; color: #065f46; font-size: 12px;
   display: flex; align-items: center; gap: 6px;
+}
+.ai-feedback {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  background: #eff6ff;
+}
+.ai-feedback-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #1e3a8a;
+  font-size: 13px;
+  font-weight: 600;
+}
+.ai-feedback p {
+  margin: 8px 0 0;
+  color: #1f2937;
+  line-height: 1.7;
+  font-size: 13px;
+  white-space: pre-wrap;
+}
+.ai-feedback-error {
+  color: #b91c1c;
 }
 .qa-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
 .error-card { background: #fef2f2; border: 1px solid #fecaca; }

@@ -1,4 +1,4 @@
-import { api, uploadApi } from './client'
+import { api, uploadApi, apiBaseURL, authHeaders, on401Logout } from './client'
 
 // ========== 客户端 API ==========
 export const authApi = {
@@ -27,6 +27,46 @@ export const jobApi = {
   recommend: (payload) => api.post('/jobs/recommend', payload),
 }
 
+async function streamSse(path, { params = {}, signal, onEvent } = {}) {
+  const search = new URLSearchParams()
+  Object.entries(params).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== '') search.set(key, String(value))
+  })
+  const url = `${apiBaseURL}${path}${search.toString() ? `?${search}` : ''}`
+  const response = await fetch(url, {
+    method: 'GET',
+    headers: authHeaders(),
+    signal,
+  })
+  if (response.status === 401) {
+    on401Logout()
+    throw new Error('登录已过期')
+  }
+  if (!response.ok || !response.body) {
+    throw new Error(`流式请求失败：${response.status}`)
+  }
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder('utf-8')
+  let buffer = ''
+  while (true) {
+    const { done, value } = await reader.read()
+    if (done) break
+    buffer += decoder.decode(value, { stream: true })
+    const blocks = buffer.split('\n\n')
+    buffer = blocks.pop() || ''
+    for (const block of blocks) {
+      const lines = block.split('\n')
+      const eventLine = lines.find((line) => line.startsWith('event: '))
+      const dataLine = lines.find((line) => line.startsWith('data: '))
+      if (!eventLine || !dataLine) continue
+      const event = eventLine.slice(7).trim()
+      const data = JSON.parse(dataLine.slice(6))
+      onEvent?.({ event, data })
+    }
+  }
+}
+
 export const interviewApi = {
   list: (params = {}) => api.get('/interviews', { params }),
   get: (id) => api.get(`/interviews/${id}`),
@@ -35,6 +75,7 @@ export const interviewApi = {
   finish: (id) => api.post(`/interviews/${id}/finish`),
   cancel: (id) => api.post(`/interviews/${id}/cancel`),
   delete: (id) => api.delete(`/interviews/${id}`),
+  stream: (id, options) => streamSse(`/interviews/${id}/stream`, options),
 }
 
 export const reportApi = {

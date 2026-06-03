@@ -9,7 +9,8 @@ import { ElMessage } from 'element-plus'
 import { useSessionStore } from '@/stores/session'
 import router from '@/router'
 
-const baseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+export const apiBaseURL = import.meta.env.VITE_API_BASE_URL || '/api/v1'
+const baseURL = apiBaseURL
 
 export const api = axios.create({
   baseURL,
@@ -28,6 +29,11 @@ function injectAuth(config) {
     config.headers.Authorization = `Bearer ${session.token}`
   }
   return config
+}
+
+export function authHeaders() {
+  const session = useSessionStore()
+  return session.token ? { Authorization: `Bearer ${session.token}` } : {}
 }
 
 function onError(error) {
