@@ -1,14 +1,19 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import pytest
+from langchain_core.language_models.fake_chat_models import FakeListChatModel
 from pydantic import ValidationError
 
+import app.services.interview_agents.followup as followup_module
 import app.services.interview_agents.llm as agent_llm
 import app.services.interview_agents.question_generator as question_generator
+import app.services.interview_agents.scoring as scoring_module
 from app.services.ai_provider import LLMResponse
 from app.services.interview_agents.events import format_sse
+from app.services.interview_agents.followup import FollowupAgent
 from app.services.interview_agents.models import (
     FollowupAction,
     FollowupResult,
@@ -20,6 +25,7 @@ from app.services.interview_agents.models import (
 from app.services.interview_agents.planner import InterviewPlannerAgent
 from app.services.interview_agents.question_generator import QuestionGenerationAgent
 from app.services.interview_agents.runtime import get_interview_agent_runtime
+from app.services.interview_agents.scoring import ScoringAgent
 
 
 def test_mock_runtime_generates_questions_with_langchain_facade() -> None:
@@ -94,6 +100,86 @@ def test_deepseek_question_generation_limits_result_to_requested_count(
     assert meta.model == "deepseek-chat"
     assert len(questions) == 2
     assert questions[-1]["position"] == 2
+
+
+def test_deepseek_followup_stream_uses_langchain_chat_model(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        followup_module,
+        "settings",
+        SimpleNamespace(AI_RUNTIME="deepseek"),
+        raising=False,
+    )
+    monkeypatch.setattr(
+        followup_module,
+        "get_chat_model",
+        lambda: FakeListChatModel(responses=["请补充监控指标和失败降级策略。"]),
+        raising=False,
+    )
+
+    chunks = list(
+        FollowupAgent().stream(
+            interview_id=1,
+            question_id=2,
+            answer="我会设计接口并补充测试。",
+            job_title="AI 应用工程师",
+            profile={"skills": ["FastAPI"]},
+            question={"question": "如何设计接口？", "rubric": ["结构", "测试"]},
+            knowledge_contexts=[],
+        )
+    )
+
+    assert "".join(chunks) == "请补充监控指标和失败降级策略。"
+
+
+def test_deepseek_scoring_uses_langchain_structured_invoke(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        scoring_module,
+        "settings",
+        SimpleNamespace(AI_RUNTIME="deepseek"),
+        raising=False,
+    )
+
+    def fake_invoke_structured(*args, **kwargs):
+        _prompt, output_model, variables = args
+        assert output_model is ScoreResult
+        assert variables["job_title"] == "AI 应用工程师"
+        assert "FastAPI" in variables["question_answers"]
+        return (
+            ScoreResult(
+                overall_score=88.0,
+                level="匹配",
+                dimension_scores={"技术准确性": 88.0},
+                question_scores=[{"position": 1, "score": 88.0, "comment": "工程细节充分"}],
+                strengths=["结构清晰"],
+                improvements=["继续量化效果"],
+                learning_plan=["复盘线上指标"],
+            ),
+            LLMResponse(content="[fake-deepseek-score]", model="deepseek-chat"),
+        )
+
+    monkeypatch.setattr(scoring_module, "invoke_structured", fake_invoke_structured, raising=False)
+
+    score, meta = ScoringAgent().score(
+        job_title="AI 应用工程师",
+        profile={"skills": ["FastAPI"]},
+        question_answers=[
+            {
+                "position": 1,
+                "skill": "FastAPI",
+                "question": "如何设计接口？",
+                "answer": "我会明确边界并设计测试、监控和降级。",
+            }
+        ],
+        knowledge_contexts=[],
+    )
+
+    assert meta.model == "deepseek-chat"
+    assert score.overall_score == 88.0
+    assert score.question_scores[0]["comment"] == "工程细节充分"
 
 
 def test_mock_planner_treats_invalid_years_as_intern() -> None:
