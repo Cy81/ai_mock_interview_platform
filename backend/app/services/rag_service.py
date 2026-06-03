@@ -367,6 +367,33 @@ def list_documents(
     return items, total
 
 
+def list_document_chunks(
+    db: Session,
+    document_id: int,
+    *,
+    page: int = 1,
+    page_size: int = 50,
+) -> tuple[list[RagChunk], int]:
+    """分页查看某个 RAG 文档的切片，不暴露 embedding 向量。"""
+    get_document(db, document_id)
+    safe_page = max(page, 1)
+    safe_page_size = max(1, min(page_size, 200))
+    count_stmt = select(func.count(RagChunk.id)).where(
+        RagChunk.document_id == document_id
+    )
+    total = db.scalar(count_stmt) or 0
+    items = list(
+        db.scalars(
+            select(RagChunk)
+            .where(RagChunk.document_id == document_id)
+            .order_by(RagChunk.chunk_index.asc())
+            .offset((safe_page - 1) * safe_page_size)
+            .limit(safe_page_size)
+        ).all()
+    )
+    return items, total
+
+
 def get_document(db: Session, document_id: int) -> RagDocument:
     document = db.get(RagDocument, document_id)
     if not document:

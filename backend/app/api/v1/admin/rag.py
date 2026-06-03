@@ -10,6 +10,7 @@ from app.db.session import get_db
 from app.models.user import User
 from app.schemas.common import Message, Page
 from app.schemas.rag import (
+    RagChunkRead,
     RagDocumentCreate,
     RagDocumentRead,
     RagDocumentUpdate,
@@ -98,6 +99,29 @@ def get_document(
     db: Session = Depends(get_db),
 ):
     return rag_service.get_document(db, document_id)
+
+
+@router.get(
+    "/documents/{document_id}/chunks",
+    response_model=Page[RagChunkRead],
+    summary="分页查看文档切片",
+)
+def list_document_chunks(
+    document_id: int,
+    page: int = 1,
+    page_size: int = 50,
+    _: User = Depends(get_current_admin),
+    db: Session = Depends(get_db),
+):
+    items, total = rag_service.list_document_chunks(
+        db, document_id, page=page, page_size=page_size
+    )
+    return Page[RagChunkRead].of(
+        [RagChunkRead.model_validate(item) for item in items],
+        total,
+        page,
+        page_size,
+    )
 
 
 @router.put(

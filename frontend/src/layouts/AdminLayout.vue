@@ -4,7 +4,8 @@ import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import {
   Activity,
   Briefcase,
-  Database,
+  BookOpenCheck,
+  FileStack,
   Home,
   LogOut,
   Users,
@@ -20,7 +21,8 @@ const menus = [
   { to: '/admin', label: '总览', icon: Home, exact: true },
   { to: '/admin/users', label: '用户管理', icon: Users },
   { to: '/admin/jobs', label: '岗位管理', icon: Briefcase },
-  { to: '/admin/rag', label: 'RAG 知识库', icon: Database },
+  { to: '/admin/questions', label: '题库管理', icon: BookOpenCheck },
+  { to: '/admin/documents', label: '文档管理', icon: FileStack },
   { to: '/admin/interviews', label: '面试记录', icon: Activity },
 ]
 

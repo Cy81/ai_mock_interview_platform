@@ -113,6 +113,8 @@ export const adminApi = {
     uploadApi.post('/admin/rag/documents/upload', formData),
   updateRagDoc: (id, payload) => api.put(`/admin/rag/documents/${id}`, payload),
   deleteRagDoc: (id) => api.delete(`/admin/rag/documents/${id}`),
+  listRagChunks: (id, params) =>
+    api.get(`/admin/rag/documents/${id}/chunks`, { params }),
   toggleRagDoc: (id, is_active) =>
     api.patch(`/admin/rag/documents/${id}/toggle`, null, {
       params: { is_active },

@@ -43,6 +43,20 @@ class RagDocumentRead(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class RagChunkRead(BaseModel):
+    id: int
+    document_id: int
+    chunk_index: int
+    content: str
+    token_count: int
+    is_active: bool
+    extra_meta: dict[str, Any]
+    created_at: datetime
+    updated_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
 class RagSearchRequest(BaseModel):
     rag_type: RagTypeLiteral
     query: str = Field(min_length=1, max_length=1000)

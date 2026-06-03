@@ -97,8 +97,19 @@ const adminRoutes = [
       {
         path: 'rag',
         name: 'admin-rag',
+        redirect: { name: 'admin-questions' },
+      },
+      {
+        path: 'questions',
+        name: 'admin-questions',
         component: () => import('@/views/admin/AdminRag.vue'),
-        meta: { title: 'RAG 知识库' },
+        meta: { title: '题库管理', ragType: 'question_bank' },
+      },
+      {
+        path: 'documents',
+        name: 'admin-documents',
+        component: () => import('@/views/admin/AdminRag.vue'),
+        meta: { title: '文档管理', ragType: 'knowledge_base' },
       },
       {
         path: 'interviews',

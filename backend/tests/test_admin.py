@@ -62,6 +62,36 @@ def test_admin_rag_document_upsert_and_search(
     assert search.json()
 
 
+def test_admin_can_view_rag_document_chunks(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    create = client.post(
+        "/api/v1/admin/rag/documents",
+        headers=admin_headers,
+        json={
+            "rag_type": "knowledge_base",
+            "title": "LangChain 文档",
+            "content": "LangChain Agent 可以组合工具、记忆和检索能力。\n\n文档分块后需要能在后台查看每个 chunk 的内容、序号和 token 数。",
+            "metadata": {"source": "chunk-test"},
+        },
+    )
+    assert create.status_code == 201, create.text
+    document_id = create.json()["id"]
+
+    chunks = client.get(
+        f"/api/v1/admin/rag/documents/{document_id}/chunks",
+        headers=admin_headers,
+    )
+    assert chunks.status_code == 200, chunks.text
+    payload = chunks.json()
+    assert payload["total"] >= 1
+    first = payload["items"][0]
+    assert first["document_id"] == document_id
+    assert first["chunk_index"] == 0
+    assert "LangChain Agent" in first["content"]
+    assert first["token_count"] >= 1
+
+
 def test_non_admin_cannot_access_admin(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:
