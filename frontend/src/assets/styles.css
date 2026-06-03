@@ -5,7 +5,7 @@
 
 :root {
   color-scheme: light;
-  font-family: "Inter", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif;
+  font-family: "Microsoft YaHei", "PingFang SC", system-ui, sans-serif;
   --primary: #3b82f6;
   --primary-dark: #1d4ed8;
   --violet: #8b5cf6;
@@ -62,7 +62,7 @@ img, svg {
 }
 
 .el-card {
-  border-radius: 14px;
+  border-radius: 8px;
   border-color: var(--line);
 }
 
@@ -84,7 +84,7 @@ img, svg {
 }
 
 .el-dialog {
-  border-radius: 16px;
+  border-radius: 8px;
 }
 
 /* 滚动条美化 */

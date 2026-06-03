@@ -24,19 +24,19 @@ const clientRoutes = [
         path: '',
         name: 'dashboard',
         component: () => import('@/views/Dashboard.vue'),
-        meta: { title: '工作台' },
+        meta: { title: '面试记录' },
       },
       {
         path: 'resumes',
         name: 'resumes',
         component: () => import('@/views/ResumeUpload.vue'),
-        meta: { title: '简历解析' },
+        meta: { title: '上传简历' },
       },
       {
         path: 'jobs',
         name: 'jobs',
         component: () => import('@/views/JobRecommend.vue'),
-        meta: { title: '岗位匹配 Agent' },
+        meta: { title: '岗位匹配' },
       },
       {
         path: 'interviews',

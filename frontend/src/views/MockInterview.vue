@@ -633,82 +633,102 @@ onUnmounted(() => {
             </p>
           </div>
 
-          <el-card v-if="currentQuestion" shadow="never" class="qa">
-            <div class="q-meta">
-              <el-tag size="small" type="primary">{{ currentQuestion.type }}</el-tag>
-              <el-tag size="small" type="warning">{{ currentQuestion.difficulty }}</el-tag>
-              <el-tag size="small">{{ currentQuestion.skill }}</el-tag>
-              <span class="muted">题号 #{{ currentQuestion.position }}</span>
-            </div>
-            <h3 class="q-text">{{ currentQuestion.question }}</h3>
+          <section v-if="currentQuestion" class="chat-room">
+            <article class="message-row interviewer-message">
+              <div class="avatar ai-avatar">AI</div>
+              <div class="message-bubble">
+                <div class="q-meta">
+                  <el-tag size="small" type="primary">{{ currentQuestion.type }}</el-tag>
+                  <el-tag size="small" type="warning">{{ currentQuestion.difficulty }}</el-tag>
+                  <el-tag size="small">{{ currentQuestion.skill }}</el-tag>
+                  <span class="muted">题号 #{{ currentQuestion.position }}</span>
+                </div>
+                <h3 class="q-text">{{ currentQuestion.question }}</h3>
 
-            <el-collapse v-if="currentQuestion.rubric?.length">
-              <el-collapse-item title="评分要点（参考，提交后给评委用）">
-                <ul class="rubric">
-                  <li v-for="r in currentQuestion.rubric" :key="r">{{ r }}</li>
-                </ul>
-              </el-collapse-item>
-            </el-collapse>
+                <el-collapse v-if="currentQuestion.rubric?.length" class="rubric-collapse">
+                  <el-collapse-item title="评分要点">
+                    <ul class="rubric">
+                      <li v-for="r in currentQuestion.rubric" :key="r">{{ r }}</li>
+                    </ul>
+                  </el-collapse-item>
+                </el-collapse>
+              </div>
+            </article>
 
-            <div class="answer-block">
+            <article
+              v-if="answeredMap.has(currentQuestion.id)"
+              class="message-row candidate-message"
+            >
+              <div class="message-bubble">
+                <div class="submitted-head">
+                  <span><CheckCircle2 :size="14" /> 已提交</span>
+                  <span v-if="answeredMap.get(currentQuestion.id)?.score != null">
+                    {{ answeredMap.get(currentQuestion.id).score }} 分
+                  </span>
+                </div>
+                <p>{{ answeredMap.get(currentQuestion.id)?.answer }}</p>
+                <small v-if="answeredMap.get(currentQuestion.id)?.comment">
+                  {{ answeredMap.get(currentQuestion.id).comment }}
+                </small>
+              </div>
+              <div class="avatar user-avatar">我</div>
+            </article>
+
+            <article
+              v-if="aiFeedback.loading || aiFeedback.content || aiFeedback.error"
+              class="message-row interviewer-message"
+            >
+              <div class="avatar ai-avatar">AI</div>
+              <div class="message-bubble feedback-bubble">
+                <div class="ai-feedback-head">
+                  <span>AI 面试官反馈</span>
+                  <el-tag v-if="aiFeedback.loading" size="small" type="warning">生成中</el-tag>
+                  <el-tag v-else size="small" type="success">已生成</el-tag>
+                </div>
+                <p v-if="aiFeedback.content">{{ aiFeedback.content }}</p>
+                <p v-if="aiFeedback.error" class="ai-feedback-error">{{ aiFeedback.error }}</p>
+              </div>
+            </article>
+
+            <section class="answer-composer">
               <div class="answer-head">
-                <span><Pencil :size="14" /> 你的回答</span>
+                <span><Pencil :size="14" /> 输入你的回答</span>
                 <span class="muted">{{ charCount }} / 8000</span>
               </div>
               <el-input
                 v-model="draftAnswer"
                 type="textarea"
-                :rows="10"
-                placeholder="尽量结构化作答：背景 / 思路 / 实现 / 结果"
+                :rows="6"
+                placeholder="按真实面试口吻作答：先给结论，再讲项目背景、技术方案、结果和复盘。"
                 maxlength="8000"
                 :disabled="['completed', 'cancelled', 'failed'].includes(current.status)"
               />
-              <p class="muted hint">
-                <Save :size="12" /> 草稿已自动保存到本地，刷新或关闭页面后再回来仍在。
-              </p>
-            </div>
-
-            <div v-if="answeredMap.has(currentQuestion.id)" class="answered-banner">
-              <CheckCircle2 :size="14" />
-              已提交（可重新作答覆盖）·
-              <span v-if="answeredMap.get(currentQuestion.id)?.score != null">
-                得分 {{ answeredMap.get(currentQuestion.id).score }} · {{ answeredMap.get(currentQuestion.id).comment }}
-              </span>
-            </div>
-
-            <div
-              v-if="aiFeedback.loading || aiFeedback.content || aiFeedback.error"
-              class="ai-feedback"
-            >
-              <div class="ai-feedback-head">
-                <span>AI 面试官反馈</span>
-                <el-tag v-if="aiFeedback.loading" size="small" type="warning">生成中</el-tag>
-                <el-tag v-else size="small" type="success">已生成</el-tag>
+              <div class="composer-foot">
+                <p class="muted hint">
+                  <Save :size="12" /> 草稿已自动保存
+                </p>
+                <div class="qa-actions">
+                  <el-button :icon="ChevronLeft" :disabled="currentIndex === 0" @click="go(-1)">
+                    上一题
+                  </el-button>
+                  <el-button
+                    type="primary"
+                    :loading="submitting"
+                    :disabled="['completed', 'cancelled', 'failed'].includes(current.status)"
+                    @click="submitAnswer"
+                  >
+                    提交回答
+                  </el-button>
+                  <el-button
+                    :disabled="currentIndex === sortedQuestions.length - 1"
+                    @click="go(1)"
+                  >
+                    下一题 <ChevronRight :size="14" />
+                  </el-button>
+                </div>
               </div>
-              <p v-if="aiFeedback.content">{{ aiFeedback.content }}</p>
-              <p v-if="aiFeedback.error" class="ai-feedback-error">{{ aiFeedback.error }}</p>
-            </div>
-
-            <div class="qa-actions">
-              <el-button :icon="ChevronLeft" :disabled="currentIndex === 0" @click="go(-1)">
-                上一题
-              </el-button>
-              <el-button
-                type="primary"
-                :loading="submitting"
-                :disabled="['completed', 'cancelled', 'failed'].includes(current.status)"
-                @click="submitAnswer"
-              >
-                提交本题
-              </el-button>
-              <el-button
-                :disabled="currentIndex === sortedQuestions.length - 1"
-                @click="go(1)"
-              >
-                下一题 <ChevronRight :size="14" />
-              </el-button>
-            </div>
-          </el-card>
+            </section>
+          </section>
 
           <el-card v-if="current.status === 'failed'" shadow="never" class="error-card">
             <strong>面试生成失败</strong>
@@ -732,7 +752,7 @@ onUnmounted(() => {
 .hint { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; }
 .history { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 8px; }
 .history li {
-  border: 1px solid #e2e8f0; border-radius: 10px; padding: 10px 12px; cursor: pointer;
+  border: 1px solid #e2e8f0; border-radius: 8px; padding: 10px 12px; cursor: pointer;
   background: #fff; transition: border-color .15s;
 }
 .history li:hover { border-color: #93c5fd; }
@@ -742,7 +762,7 @@ onUnmounted(() => {
 .history strong { font-size: 13px; color: #0f172a; }
 .stage-head {
   display: flex; justify-content: space-between; align-items: flex-end;
-  background: #fff; padding: 18px 22px; border-radius: 14px;
+  background: #fff; padding: 18px 22px; border-radius: 8px;
   box-shadow: 0 4px 18px -10px rgba(15,23,42,.15);
 }
 .stage-head .eyebrow { margin: 0 0 4px; color: #94a3b8; font-size: 11px; letter-spacing: 1.5px; display: flex; gap: 8px; align-items: center; }
@@ -841,11 +861,130 @@ onUnmounted(() => {
 .qa-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
 .error-card { background: #fef2f2; border: 1px solid #fecaca; }
 .error-card strong { color: #b91c1c; }
+.chat-room {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding: 18px;
+  border: 1px solid #dce5f0;
+  border-radius: 8px;
+  background:
+    linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 251, 255, 0.92)),
+    radial-gradient(circle at 12% 10%, rgba(64, 150, 255, 0.13), transparent 20rem);
+}
+.message-row {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+.candidate-message {
+  justify-content: flex-end;
+}
+.avatar {
+  width: 38px;
+  height: 38px;
+  flex: 0 0 38px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 800;
+}
+.ai-avatar {
+  color: #172033;
+  background: #fff;
+  border: 2px solid #253044;
+}
+.user-avatar {
+  color: #fff;
+  background: linear-gradient(135deg, #2f7df6, #15b8a6);
+}
+.message-bubble {
+  max-width: min(760px, calc(100% - 54px));
+  padding: 16px 18px;
+  border: 1px solid #dfe7f1;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 12px 30px rgba(28, 43, 68, 0.08);
+}
+.candidate-message .message-bubble {
+  color: #fff;
+  background: linear-gradient(135deg, #2f7df6, #2366d9);
+  border-color: transparent;
+}
+.candidate-message p {
+  margin: 10px 0 0;
+  line-height: 1.8;
+  white-space: pre-wrap;
+}
+.candidate-message small {
+  display: block;
+  margin-top: 10px;
+  color: rgba(255, 255, 255, 0.82);
+  line-height: 1.7;
+}
+.submitted-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 13px;
+  font-weight: 700;
+}
+.submitted-head span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.rubric-collapse {
+  margin-top: 10px;
+}
+.feedback-bubble {
+  background: #f6fbff;
+}
+.answer-composer {
+  position: sticky;
+  bottom: 12px;
+  z-index: 5;
+  padding: 14px;
+  border: 1px solid #cbd9eb;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 18px 44px rgba(28, 43, 68, 0.14);
+  backdrop-filter: blur(14px);
+}
+.answer-composer :deep(.el-textarea__inner) {
+  border-radius: 8px;
+  line-height: 1.7;
+}
+.composer-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 10px;
+}
+.answer-composer .qa-actions {
+  margin-top: 0;
+}
 @media (max-width: 1024px) {
   .layout { grid-template-columns: 1fr; }
   .aside { position: static; }
 }
 @media (max-width: 640px) {
   .scoring-steps { grid-template-columns: 1fr; }
+  .stage-head,
+  .composer-foot {
+    align-items: stretch;
+    flex-direction: column;
+  }
+  .message-bubble {
+    max-width: calc(100% - 46px);
+  }
+  .answer-composer .qa-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+  }
 }
 </style>

@@ -1,15 +1,17 @@
 <script setup>
-/**
- * 客户端工作台：
- *  - 顶部 4 个核心 KPI；
- *  - 中部"业务链路 + 最新雷达图报告"；
- *  - 底部岗位池快照。
- *  返回值适配后端 Page[T]：{ items, total, page, page_size }。
- */
 import { computed, onMounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
-import VChart from 'vue-echarts'
-import { ArrowRight, RefreshCw, Sparkles, Trophy } from 'lucide-vue-next'
+import { ElMessage } from 'element-plus'
+import {
+  ArrowRight,
+  Briefcase,
+  Clock3,
+  FileText,
+  Play,
+  RefreshCw,
+  Sparkles,
+  Upload,
+} from 'lucide-vue-next'
 import { interviewApi, jobApi, resumeApi } from '@/api/modules'
 
 const router = useRouter()
@@ -19,101 +21,58 @@ const error = ref('')
 const resumes = ref([])
 const interviews = ref([])
 const jobs = ref([])
+const selectedResumeId = ref('')
+const selectedJobCode = ref('')
 
-const completed = computed(
-  () => interviews.value.filter((i) => i.status === 'completed').length,
+const statusMeta = {
+  created: { type: 'info', label: '已创建' },
+  generating: { type: 'warning', label: '生成中' },
+  in_progress: { type: 'primary', label: '进行中' },
+  scoring: { type: 'warning', label: '评分中' },
+  completed: { type: 'success', label: '已完成' },
+  failed: { type: 'danger', label: '失败' },
+  cancelled: { type: 'info', label: '已取消' },
+}
+
+const parsedResumes = computed(() =>
+  resumes.value.filter((item) => item.parse_status === 'parsed'),
 )
-const inProgress = computed(
-  () => interviews.value.filter((i) => i.status === 'in_progress').length,
+const latestInterviews = computed(() =>
+  [...interviews.value].sort(
+    (a, b) => new Date(b.created_at || 0) - new Date(a.created_at || 0),
+  ),
 )
-const latestReport = computed(() => {
-  const completedItems = interviews.value
-    .filter((i) => i.status === 'completed' && i.score_report)
-    .sort((a, b) => new Date(b.completed_at || 0) - new Date(a.completed_at || 0))
-  return completedItems[0]?.score_report || null
+const completedCount = computed(
+  () => interviews.value.filter((item) => item.status === 'completed').length,
+)
+const activeCount = computed(
+  () => interviews.value.filter((item) => ['created', 'in_progress', 'scoring'].includes(item.status)).length,
+)
+const latestScore = computed(() => {
+  const report = latestInterviews.value.find((item) => item.score_report)?.score_report
+  return report?.overall_score ? Math.round(report.overall_score) : null
 })
-
-const radarOption = computed(() => {
-  const dim = latestReport.value?.dimension_scores
-  if (!dim) return null
-  const indicator = Object.keys(dim).map((name) => ({ name, max: 100 }))
-  return {
-    radar: {
-      indicator,
-      splitLine: { lineStyle: { color: '#cbd5e1' } },
-      splitArea: { areaStyle: { color: ['#f8fafc', '#f1f5f9'] } },
-      axisLine: { lineStyle: { color: '#cbd5e1' } },
-      name: { textStyle: { color: '#475569', fontSize: 12 } },
-    },
-    series: [
-      {
-        type: 'radar',
-        data: [
-          {
-            value: Object.values(dim),
-            name: '当前评分',
-            areaStyle: { color: 'rgba(59,130,246,.18)' },
-            lineStyle: { color: '#3b82f6', width: 2 },
-            itemStyle: { color: '#3b82f6' },
-          },
-        ],
-      },
-    ],
-    tooltip: { trigger: 'item' },
-  }
-})
-
-const trendOption = computed(() => {
-  const completedItems = interviews.value
-    .filter((i) => i.status === 'completed' && i.score_report)
-    .sort((a, b) => new Date(a.completed_at || 0) - new Date(b.completed_at || 0))
-    .slice(-8)
-  if (!completedItems.length) return null
-  return {
-    grid: { left: 30, right: 14, top: 24, bottom: 28 },
-    tooltip: { trigger: 'axis' },
-    xAxis: {
-      type: 'category',
-      data: completedItems.map(
-        (i, idx) => `#${i.id || idx + 1}`,
-      ),
-      axisLine: { lineStyle: { color: '#cbd5e1' } },
-      axisLabel: { color: '#64748b', fontSize: 11 },
-    },
-    yAxis: {
-      type: 'value',
-      min: 0,
-      max: 100,
-      splitLine: { lineStyle: { color: '#e2e8f0' } },
-      axisLabel: { color: '#64748b', fontSize: 11 },
-    },
-    series: [
-      {
-        type: 'line',
-        smooth: true,
-        symbolSize: 8,
-        lineStyle: { color: '#8b5cf6', width: 2.5 },
-        itemStyle: { color: '#8b5cf6' },
-        areaStyle: {
-          color: {
-            type: 'linear',
-            x: 0, y: 0, x2: 0, y2: 1,
-            colorStops: [
-              { offset: 0, color: 'rgba(139,92,246,.4)' },
-              { offset: 1, color: 'rgba(139,92,246,0)' },
-            ],
-          },
-        },
-        data: completedItems.map((i) => i.score_report?.overall_score || 0),
-      },
-    ],
-  }
-})
+const selectedResume = computed(
+  () => parsedResumes.value.find((item) => item.id === selectedResumeId.value) || null,
+)
+const selectedJob = computed(
+  () => jobs.value.find((item) => item.code === selectedJobCode.value) || null,
+)
 
 function unwrap(resp) {
   if (Array.isArray(resp)) return resp
   if (resp && Array.isArray(resp.items)) return resp.items
   return []
+}
+
+function formatDate(value) {
+  if (!value) return '暂无时间'
+  return new Date(value).toLocaleString()
+}
+
+function scoreOf(item) {
+  const score = item.score_report?.overall_score ?? item.overall_score
+  return score == null ? null : Math.round(score)
 }
 
 async function load() {
@@ -128,6 +87,12 @@ async function load() {
     resumes.value = unwrap(resumeData)
     interviews.value = unwrap(interviewData)
     jobs.value = unwrap(jobData)
+    if (!selectedResumeId.value && parsedResumes.value.length) {
+      selectedResumeId.value = parsedResumes.value[0].id
+    }
+    if (!selectedJobCode.value && jobs.value.length) {
+      selectedJobCode.value = jobs.value[0].code
+    }
   } catch (err) {
     error.value = err?.message || '加载失败'
   } finally {
@@ -135,152 +100,509 @@ async function load() {
   }
 }
 
+function startInterview() {
+  if (!selectedResumeId.value) {
+    ElMessage.warning('请先选择一份已解析简历')
+    return
+  }
+  if (!selectedJobCode.value) {
+    ElMessage.warning('请先选择目标岗位')
+    return
+  }
+  router.push({
+    path: '/interviews',
+    query: {
+      resume_id: selectedResumeId.value,
+      job_code: selectedJobCode.value,
+    },
+  })
+}
+
+function openInterview(item) {
+  if (item.status === 'completed') {
+    router.push(`/reports/${item.id}`)
+    return
+  }
+  router.push(`/interviews/${item.id}`)
+}
+
 onMounted(load)
 </script>
 
 <template>
-  <div class="dashboard">
+  <div class="dashboard user-home">
     <el-alert v-if="error" type="error" :title="error" show-icon :closable="false" />
 
-    <el-row :gutter="16" class="kpis">
-      <el-col :xs="12" :md="6">
-        <el-card shadow="hover" class="kpi kpi-blue">
-          <span>简历档案</span>
-          <strong>{{ resumes.length }}</strong>
-          <small>覆盖原始 + 解析版本</small>
-        </el-card>
-      </el-col>
-      <el-col :xs="12" :md="6">
-        <el-card shadow="hover" class="kpi kpi-amber">
-          <span>面试总场次</span>
-          <strong>{{ interviews.length }}</strong>
-          <small>含进行中 / 已完成 / 已取消</small>
-        </el-card>
-      </el-col>
-      <el-col :xs="12" :md="6">
-        <el-card shadow="hover" class="kpi kpi-emerald">
-          <span>已出报告</span>
-          <strong>{{ completed }}</strong>
-          <small>含双 RAG 引用 / 学习计划</small>
-        </el-card>
-      </el-col>
-      <el-col :xs="12" :md="6">
-        <el-card shadow="hover" class="kpi kpi-violet">
-          <span>进行中</span>
-          <strong>{{ inProgress }}</strong>
-          <small>待回答 / 待评分</small>
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-row :gutter="16" class="mt">
-      <el-col :xs="24" :md="14">
-        <el-card shadow="never">
-          <template #header>
-            <div class="card-head">
-              <h3>评分趋势</h3>
-              <el-button text :icon="RefreshCw" :loading="loading" @click="load">刷新</el-button>
-            </div>
-          </template>
-          <div v-if="trendOption" class="chart-wrap">
-            <VChart :option="trendOption" autoresize style="height: 280px" />
-          </div>
-          <el-empty v-else description="尚未生成评分报告" />
-        </el-card>
-      </el-col>
-
-      <el-col :xs="24" :md="10">
-        <el-card shadow="never">
-          <template #header>
-            <div class="card-head">
-              <h3>最新评估雷达</h3>
-              <el-tag v-if="latestReport" size="small" type="success">
-                <Trophy :size="12" /> {{ latestReport.level }} · {{ latestReport.overall_score }}
-              </el-tag>
-            </div>
-          </template>
-          <div v-if="radarOption" class="chart-wrap">
-            <VChart :option="radarOption" autoresize style="height: 280px" />
-          </div>
-          <el-empty v-else description="完成一场面试以查看雷达图" />
-        </el-card>
-      </el-col>
-    </el-row>
-
-    <el-card shadow="never" class="mt">
-      <template #header>
-        <div class="card-head">
-          <h3>岗位池</h3>
-          <el-button text type="primary" @click="router.push('/jobs')">
-            进入推荐 Agent <ArrowRight :size="14" />
-          </el-button>
+    <section class="home-hero">
+      <div class="hero-copy">
+        <p class="section-kicker">AI MOCK INTERVIEW</p>
+        <h1>面试记录</h1>
+        <p>
+          选择一份已解析简历，匹配目标岗位，直接进入多轮 AI 模拟面试。
+          历史面试、评分报告和继续作答都在这里。
+        </p>
+        <div class="hero-stats">
+          <span><strong>{{ interviews.length }}</strong> 场面试</span>
+          <span><strong>{{ completedCount }}</strong> 份报告</span>
+          <span><strong>{{ activeCount }}</strong> 个进行中</span>
+          <span><strong>{{ latestScore ?? '-' }}</strong> 最新评分</span>
         </div>
-      </template>
-      <el-empty v-if="!jobs.length" description="岗位池暂无数据" />
-      <el-row v-else :gutter="14">
-        <el-col v-for="job in jobs.slice(0, 6)" :key="job.code" :xs="24" :md="8" class="job-col">
-          <div class="job-card">
-            <div class="job-head">
-              <strong>{{ job.title }}</strong>
-              <el-tag size="small" effect="plain">{{ job.code }}</el-tag>
-            </div>
-            <p class="muted">{{ job.description || '暂无描述' }}</p>
-            <div class="tags">
-              <el-tag
-                v-for="skill in (job.required_skills || []).slice(0, 5)"
-                :key="skill"
-                size="small"
-                type="info"
-                effect="plain"
-              >
-                {{ skill }}
+      </div>
+
+      <div class="resume-start-panel">
+        <div class="panel-head">
+          <Sparkles :size="18" />
+          <strong>开始新面试</strong>
+        </div>
+        <el-form label-position="top">
+          <el-form-item label="选择简历">
+            <el-select
+              v-model="selectedResumeId"
+              placeholder="选择已解析简历"
+              style="width: 100%"
+              :disabled="!parsedResumes.length"
+            >
+              <el-option
+                v-for="resume in parsedResumes"
+                :key="resume.id"
+                :value="resume.id"
+                :label="`#${resume.id} ${resume.filename}`"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="目标岗位">
+            <el-select
+              v-model="selectedJobCode"
+              placeholder="选择岗位"
+              style="width: 100%"
+              :disabled="!jobs.length"
+            >
+              <el-option
+                v-for="job in jobs"
+                :key="job.code"
+                :value="job.code"
+                :label="job.title"
+              />
+            </el-select>
+          </el-form-item>
+        </el-form>
+        <div v-if="selectedResume" class="resume-note">
+          <FileText :size="14" />
+          <span>{{ selectedResume.target_position || '未填写目标岗位' }}</span>
+        </div>
+        <div v-if="selectedJob" class="resume-note">
+          <Briefcase :size="14" />
+          <span>{{ selectedJob.description || selectedJob.title }}</span>
+        </div>
+        <el-button
+          type="primary"
+          size="large"
+          :icon="Play"
+          :disabled="!selectedResumeId || !selectedJobCode"
+          @click="startInterview"
+        >
+          开启 AI 模拟面试
+        </el-button>
+        <el-button
+          v-if="!parsedResumes.length"
+          class="upload-empty"
+          :icon="Upload"
+          @click="router.push('/resumes')"
+        >
+          先上传简历
+        </el-button>
+      </div>
+    </section>
+
+    <section class="quick-lanes" aria-label="快捷入口">
+      <button type="button" class="lane lane-upload" @click="router.push('/resumes')">
+        <Upload :size="20" />
+        <span>
+          <strong>上传简历</strong>
+          <small>PDF 持久化解析</small>
+        </span>
+        <ArrowRight :size="16" />
+      </button>
+      <button type="button" class="lane lane-job" @click="router.push('/jobs')">
+        <Briefcase :size="20" />
+        <span>
+          <strong>岗位匹配</strong>
+          <small>让 Agent 推荐方向</small>
+        </span>
+        <ArrowRight :size="16" />
+      </button>
+      <button type="button" class="lane lane-report" @click="router.push('/reports')">
+        <FileText :size="20" />
+        <span>
+          <strong>评分报告</strong>
+          <small>查看能力雷达</small>
+        </span>
+        <ArrowRight :size="16" />
+      </button>
+    </section>
+
+    <section class="interview-records">
+      <div class="records-head">
+        <div>
+          <p class="section-kicker">RECORDS</p>
+          <h2>我的面试记录</h2>
+        </div>
+        <el-button text :icon="RefreshCw" :loading="loading" @click="load">刷新</el-button>
+      </div>
+
+      <div v-loading="loading" class="records-body">
+        <div v-if="!latestInterviews.length" class="empty-records">
+          <div class="empty-icon">🎯</div>
+          <strong>还没有面试记录</strong>
+          <p>上传简历并选择岗位后，开始你的第一次 AI 模拟面试。</p>
+          <el-button type="primary" @click="router.push('/resumes')">上传简历</el-button>
+        </div>
+
+        <article
+          v-for="item in latestInterviews"
+          v-else
+          :key="item.id"
+          class="record-card"
+          @click="openInterview(item)"
+        >
+          <div class="record-main">
+            <div class="record-title">
+              <strong>{{ item.job_title || item.job_code || '模拟面试' }}</strong>
+              <el-tag :type="statusMeta[item.status]?.type || 'info'" size="small">
+                {{ statusMeta[item.status]?.label || item.status }}
               </el-tag>
             </div>
+            <p>
+              <Clock3 :size="14" />
+              {{ formatDate(item.created_at) }}
+            </p>
           </div>
-        </el-col>
-      </el-row>
-    </el-card>
-
-    <el-card shadow="never" class="mt cta">
-      <Sparkles :size="20" />
-      <div>
-        <strong>下一步建议</strong>
-        <p>上传简历 → 让岗位 Agent 推荐方向 → 选取岗位发起模拟面试 → 查看双 RAG 加持的评分报告。</p>
+          <div class="record-side">
+            <span v-if="scoreOf(item) != null" class="score-pill">
+              {{ scoreOf(item) }} 分
+            </span>
+            <span v-else class="score-pill pending">待评分</span>
+            <el-button type="primary" plain>
+              {{ item.status === 'completed' ? '查看报告' : '继续面试' }}
+            </el-button>
+          </div>
+        </article>
       </div>
-      <el-button type="primary" @click="router.push('/resumes')">立即开始</el-button>
-    </el-card>
+    </section>
   </div>
 </template>
 
 <style scoped>
-.dashboard { display: flex; flex-direction: column; gap: 16px; }
-.mt { margin-top: 4px; }
-.kpis :deep(.el-card__body) { padding: 18px 20px; }
-.kpi { border: 0; border-radius: 14px; color: #fff; min-height: 110px; }
-.kpi span { font-size: 12px; letter-spacing: 1px; opacity: .9; }
-.kpi strong { display: block; font-size: 30px; margin: 6px 0 4px; }
-.kpi small { font-size: 11px; opacity: .8; }
-.kpi-blue { background: linear-gradient(135deg,#0ea5e9,#3b82f6); }
-.kpi-amber { background: linear-gradient(135deg,#f59e0b,#f97316); }
-.kpi-emerald { background: linear-gradient(135deg,#10b981,#22c55e); }
-.kpi-violet { background: linear-gradient(135deg,#8b5cf6,#6366f1); }
-.card-head { display: flex; justify-content: space-between; align-items: center; }
-.card-head h3 { margin: 0; font-size: 15px; color: #0f172a; }
-.chart-wrap { height: 280px; }
-.job-col { margin-bottom: 12px; }
-.job-card {
-  background: #f8fafc; border-radius: 12px; padding: 14px 16px; height: 100%;
-  border: 1px solid #e2e8f0; display: flex; flex-direction: column; gap: 8px;
+.user-home {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
 }
-.job-head { display: flex; justify-content: space-between; align-items: center; }
-.muted { color: #64748b; font-size: 12px; line-height: 1.6; margin: 0; }
-.tags { display: flex; flex-wrap: wrap; gap: 6px; }
-.cta {
-  display: flex; align-items: center; gap: 16px;
-  background: linear-gradient(120deg,#eff6ff,#f5f3ff);
-  border: 1px dashed #c7d2fe;
+
+.home-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 22px;
+  align-items: stretch;
 }
-.cta :deep(.el-card__body) { display: flex; align-items: center; gap: 18px; width: 100%; }
-.cta strong { color: #1e293b; }
-.cta p { color: #475569; margin: 4px 0 0; font-size: 13px; }
+
+.hero-copy,
+.resume-start-panel,
+.interview-records {
+  border: 1px solid #dde6f1;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.88);
+  box-shadow: 0 18px 44px rgba(28, 43, 68, 0.08);
+}
+
+.hero-copy {
+  min-height: 256px;
+  padding: 34px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.94), rgba(240, 247, 255, 0.9)),
+    radial-gradient(circle at 88% 18%, rgba(255, 79, 129, 0.18), transparent 16rem);
+}
+
+.section-kicker {
+  margin: 0 0 8px;
+  color: #6b7b91;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.hero-copy h1,
+.records-head h2 {
+  margin: 0;
+  color: #172033;
+}
+
+.hero-copy h1 {
+  font-size: 40px;
+  line-height: 1.15;
+}
+
+.hero-copy p:not(.section-kicker) {
+  max-width: 660px;
+  margin: 14px 0 0;
+  color: #5f6f89;
+  font-size: 15px;
+  line-height: 1.8;
+}
+
+.hero-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 24px;
+}
+
+.hero-stats span {
+  min-width: 118px;
+  padding: 10px 12px;
+  border: 1px solid #dfe8f4;
+  border-radius: 8px;
+  color: #5f6f89;
+  background: #fff;
+  font-size: 13px;
+}
+
+.hero-stats strong {
+  color: #172033;
+  font-size: 20px;
+}
+
+.resume-start-panel {
+  padding: 22px;
+}
+
+.panel-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 18px;
+  color: #172033;
+}
+
+.resume-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  margin-bottom: 10px;
+  color: #6b7b91;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.resume-start-panel .el-button {
+  width: 100%;
+  margin-top: 10px;
+  border-radius: 8px;
+}
+
+.upload-empty {
+  margin-left: 0;
+}
+
+.quick-lanes {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+
+.lane {
+  min-height: 82px;
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid #dde6f1;
+  border-radius: 8px;
+  color: #172033;
+  background: #fff;
+  text-align: left;
+  cursor: pointer;
+  transition:
+    transform 0.18s ease,
+    box-shadow 0.18s ease,
+    border-color 0.18s ease;
+}
+
+.lane:hover {
+  transform: translateY(-2px);
+  border-color: #b8cdf0;
+  box-shadow: 0 14px 30px rgba(28, 43, 68, 0.1);
+}
+
+.lane svg:first-child {
+  width: 38px;
+  height: 38px;
+  padding: 9px;
+  border-radius: 8px;
+}
+
+.lane-upload svg:first-child {
+  color: #0f766e;
+  background: #dff8f4;
+}
+
+.lane-job svg:first-child {
+  color: #b45309;
+  background: #fff1d6;
+}
+
+.lane-report svg:first-child {
+  color: #be185d;
+  background: #ffe4ef;
+}
+
+.lane strong,
+.lane small {
+  display: block;
+}
+
+.lane small {
+  margin-top: 4px;
+  color: #7b889a;
+}
+
+.interview-records {
+  padding: 24px;
+}
+
+.records-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.records-head h2 {
+  font-size: 24px;
+}
+
+.records-body {
+  min-height: 180px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.empty-records {
+  min-height: 220px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  border: 1px dashed #ccd8e8;
+  border-radius: 8px;
+  color: #5f6f89;
+  background: #f8fbff;
+  text-align: center;
+}
+
+.empty-icon {
+  font-size: 38px;
+}
+
+.empty-records strong {
+  color: #172033;
+  font-size: 16px;
+}
+
+.empty-records p {
+  margin: 0;
+  font-size: 13px;
+}
+
+.record-card {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: center;
+  padding: 16px;
+  border: 1px solid #e3eaf3;
+  border-radius: 8px;
+  background: #fff;
+  cursor: pointer;
+  transition:
+    transform 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+
+.record-card:hover {
+  transform: translateY(-1px);
+  border-color: #b8cdf0;
+  box-shadow: 0 12px 26px rgba(28, 43, 68, 0.08);
+}
+
+.record-title,
+.record-side {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.record-title strong {
+  color: #172033;
+  font-size: 16px;
+}
+
+.record-main p {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 8px 0 0;
+  color: #7b889a;
+  font-size: 13px;
+}
+
+.score-pill {
+  min-width: 66px;
+  padding: 7px 10px;
+  border-radius: 999px;
+  color: #0f766e;
+  background: #dff8f4;
+  font-size: 13px;
+  font-weight: 800;
+  text-align: center;
+}
+
+.score-pill.pending {
+  color: #7b889a;
+  background: #eef2f6;
+}
+
+@media (max-width: 980px) {
+  .home-hero,
+  .quick-lanes {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .hero-copy,
+  .resume-start-panel,
+  .interview-records {
+    padding: 18px;
+  }
+
+  .hero-copy h1 {
+    font-size: 32px;
+  }
+
+  .record-card {
+    grid-template-columns: 1fr;
+  }
+
+  .record-side {
+    justify-content: space-between;
+  }
+}
 </style>
