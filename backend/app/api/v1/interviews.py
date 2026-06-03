@@ -9,7 +9,8 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.core.exceptions import DomainError
-from app.db.session import get_db
+from app.db.session import SessionLocal, get_db
+from app.models.interview import InterviewQuestion
 from app.models.resume import Resume
 from app.models.user import User
 from app.schemas.common import Message, Page
@@ -154,23 +155,20 @@ def stream_interview(
     user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    interview = interview_service.get_interview(db, user, interview_id)
+    if mode == "followup":
+        followup_payload = _prepare_followup_stream_payload(db, user, interview_id, question_id)
+        db.close()
+        return StreamingResponse(
+            _followup_event_stream(followup_payload),
+            media_type="text/event-stream",
+        )
 
-    def event_stream():
-        try:
-            if mode == "followup":
-                yield from _stream_followup_events(
-                    db=db,
-                    interview=interview,
-                    question_id=question_id,
-                )
-            else:
-                yield from _stream_scoring_events(db=db, user=user, interview_id=interview_id)
-        except Exception as exc:  # defensive stream guard
-            yield error_event(str(exc), stage=mode, interview_id=interview_id)
-            yield format_sse("done", {"interview_id": interview_id})
-
-    return StreamingResponse(event_stream(), media_type="text/event-stream")
+    scoring_payload = _prepare_scoring_stream_payload(db, user, interview_id)
+    db.close()
+    return StreamingResponse(
+        _scoring_event_stream(scoring_payload),
+        media_type="text/event-stream",
+    )
 
 
 @router.get(
@@ -199,12 +197,13 @@ def stream_answer(
     return StreamingResponse(event_stream(), media_type="text/event-stream")
 
 
-def _stream_followup_events(
-    *,
+def _prepare_followup_stream_payload(
     db: Session,
-    interview,
+    user: User,
+    interview_id: int,
     question_id: int | None,
-):
+) -> dict[str, object]:
+    interview = interview_service.get_interview(db, user, interview_id)
     if question_id is None:
         raise DomainError("followup mode requires question_id")
 
@@ -227,73 +226,122 @@ def _stream_followup_events(
             top_k=5,
         )
     ]
+    return {
+        "interview_id": interview.id,
+        "question": _question_payload(question),
+        "answer": {
+            "id": answer.id,
+            "text": answer.answer,
+        },
+        "job_title": interview.job_title,
+        "profile": profile,
+        "knowledge_contexts": knowledge_contexts,
+    }
+
+
+def _prepare_scoring_stream_payload(db: Session, user: User, interview_id: int) -> dict[str, object]:
+    interview = interview_service.get_interview(db, user, interview_id)
+    if not interview.answers:
+        raise DomainError("请至少提交一道题的回答后再生成报告")
+    return {
+        "interview_id": interview.id,
+        "user": user,
+    }
+
+
+def _followup_event_stream(payload: dict[str, object]):
+    interview_id = int(payload["interview_id"])
+    question = payload["question"]
+    answer = payload["answer"]
+    job_title = str(payload["job_title"])
+    profile = payload["profile"]
+    knowledge_contexts = payload["knowledge_contexts"]
 
     yield format_sse(
         "followup_started",
         {
-            "interview_id": interview.id,
-            "question_id": question.id,
-            "answer_id": answer.id,
+            "interview_id": interview_id,
+            "question_id": question["id"],
+            "answer_id": answer["id"],
         },
     )
 
     chunks: list[str] = []
-    for token in get_interview_agent_runtime().stream_followup(
-        interview_id=interview.id,
-        question_id=question.id,
-        answer=answer.answer,
-        job_title=interview.job_title,
-        profile=profile,
-        question={
-            "id": question.id,
-            "position": question.position,
-            "type": question.type.value,
-            "difficulty": question.difficulty.value,
-            "skill": question.skill,
-            "question": question.question,
-            "rubric": question.rubric,
-            "reference_chunk_ids": question.reference_chunk_ids,
-        },
-        knowledge_contexts=knowledge_contexts,
-    ):
-        chunks.append(token)
-        yield format_sse(
-            "followup_delta",
-            {
-                "interview_id": interview.id,
-                "question_id": question.id,
-                "content": token,
-            },
-        )
+    try:
+        for token in get_interview_agent_runtime().stream_followup(
+            interview_id=interview_id,
+            question_id=int(question["id"]),
+            answer=str(answer["text"]),
+            job_title=job_title,
+            profile=profile,  # already detached plain data
+            question=question,
+            knowledge_contexts=knowledge_contexts,
+        ):
+            chunks.append(token)
+            yield format_sse(
+                "followup_delta",
+                {
+                    "interview_id": interview_id,
+                    "question_id": question["id"],
+                    "content": token,
+                },
+            )
+    except Exception as exc:
+        yield error_event(str(exc), stage="followup", interview_id=interview_id)
+        yield format_sse("done", {"interview_id": interview_id})
+        return
 
-    final_content = "".join(chunks)
     yield format_sse(
         "followup_done",
         {
-            "interview_id": interview.id,
-            "question_id": question.id,
-            "content": final_content,
+            "interview_id": interview_id,
+            "question_id": question["id"],
+            "content": "".join(chunks),
         },
     )
-    yield format_sse("done", {"interview_id": interview.id})
+    yield format_sse("done", {"interview_id": interview_id})
 
 
-def _stream_scoring_events(*, db: Session, user: User, interview_id: int):
+def _scoring_event_stream(payload: dict[str, object]):
+    interview_id = int(payload["interview_id"])
+    user = payload["user"]
     yield format_sse("scoring_started", {"interview_id": interview_id})
-    interview = interview_service.finish_interview(db, user, interview_id)
-    yield format_sse(
-        "scoring_done",
-        {
-            "interview_id": interview.id,
-            "status": interview.status.value,
-            "overall_score": interview.overall_score,
-        },
-    )
-    yield format_sse(
-        "report_ready",
-        {
-            "interview_id": interview.id,
-            "report": interview.score_report,
-        },
-    )
-    yield format_sse("done", {"interview_id": interview.id})
+
+    try:
+        with SessionLocal() as stream_db:
+            interview = interview_service.finish_interview(stream_db, user, interview_id)
+            report = interview.score_report
+            yield format_sse(
+                "scoring_done",
+                {
+                    "interview_id": interview.id,
+                    "status": interview.status.value,
+                    "overall_score": interview.overall_score,
+                },
+            )
+            yield format_sse(
+                "report_ready",
+                {
+                    "interview_id": interview.id,
+                    "report": report,
+                },
+            )
+    except Exception as exc:
+        yield error_event(str(exc), stage="scoring", interview_id=interview_id)
+        yield format_sse("done", {"interview_id": interview_id})
+        return
+
+    yield format_sse("done", {"interview_id": interview_id})
+
+
+def _question_payload(question: InterviewQuestion) -> dict[str, object]:
+    return {
+        "id": question.id,
+        "position": question.position,
+        "type": question.type.value,
+        "difficulty": question.difficulty.value,
+        "skill": question.skill,
+        "question": question.question,
+        "rubric": list(question.rubric),
+        "reference_chunk_ids": list(question.reference_chunk_ids),
+    }

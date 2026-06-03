@@ -5,7 +5,12 @@ import json
 from fastapi.testclient import TestClient
 
 
-def _create_interview_with_answers(client: TestClient, auth_headers: dict[str, str]) -> dict:
+def _create_interview(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    *,
+    answer_questions: bool = True,
+) -> dict:
     resume_response = client.post(
         "/api/v1/resumes",
         headers=auth_headers,
@@ -39,20 +44,21 @@ def _create_interview_with_answers(client: TestClient, auth_headers: dict[str, s
     assert interview_response.status_code == 201, interview_response.text
     interview = interview_response.json()
 
-    for question in interview["questions"]:
-        answer_response = client.post(
-            f"/api/v1/interviews/{interview['id']}/answers",
-            headers=auth_headers,
-            json={
-                "question_id": question["id"],
-                "answer": (
-                    "我会先定义目标和边界，再设计接口、测试、监控、降级和安全策略，"
-                    "并根据指标复盘迭代。"
-                ),
-                "duration_ms": 18000,
-            },
-        )
-        assert answer_response.status_code == 200, answer_response.text
+    if answer_questions:
+        for question in interview["questions"]:
+            answer_response = client.post(
+                f"/api/v1/interviews/{interview['id']}/answers",
+                headers=auth_headers,
+                json={
+                    "question_id": question["id"],
+                    "answer": (
+                        "我会先定义目标和边界，再设计接口、测试、监控、降级和安全策略，"
+                        "并根据指标复盘迭代。"
+                    ),
+                    "duration_ms": 18000,
+                },
+            )
+            assert answer_response.status_code == 200, answer_response.text
 
     return interview
 
@@ -85,7 +91,7 @@ def _read_sse_events(response) -> list[dict[str, object]]:
 
 
 def test_followup_stream_emits_structured_events(client: TestClient, auth_headers: dict[str, str]) -> None:
-    interview = _create_interview_with_answers(client, auth_headers)
+    interview = _create_interview(client, auth_headers)
     question_id = interview["questions"][0]["id"]
 
     with client.stream(
@@ -107,8 +113,39 @@ def test_followup_stream_emits_structured_events(client: TestClient, auth_header
     assert events[-2]["data"]["content"]
 
 
+def test_followup_stream_rejects_invalid_requests_before_streaming(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    interview = _create_interview(client, auth_headers, answer_questions=False)
+    question_id = interview["questions"][0]["id"]
+
+    missing_question = client.get(
+        f"/api/v1/interviews/{interview['id']}/stream",
+        headers=auth_headers,
+        params={"mode": "followup"},
+    )
+    assert missing_question.status_code == 400
+    assert missing_question.json()["detail"] == "followup mode requires question_id"
+
+    bad_question = client.get(
+        f"/api/v1/interviews/{interview['id']}/stream",
+        headers=auth_headers,
+        params={"mode": "followup", "question_id": 999999},
+    )
+    assert bad_question.status_code == 400
+    assert bad_question.json()["detail"] == "题目不存在或不属于当前面试"
+
+    missing_answer = client.get(
+        f"/api/v1/interviews/{interview['id']}/stream",
+        headers=auth_headers,
+        params={"mode": "followup", "question_id": question_id},
+    )
+    assert missing_answer.status_code == 400
+    assert missing_answer.json()["detail"] == "该题尚未提交答案"
+
+
 def test_scoring_stream_emits_structured_events(client: TestClient, auth_headers: dict[str, str]) -> None:
-    interview = _create_interview_with_answers(client, auth_headers)
+    interview = _create_interview(client, auth_headers)
 
     with client.stream(
         "GET",
