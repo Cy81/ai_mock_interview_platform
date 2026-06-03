@@ -43,6 +43,12 @@ const aiFeedback = reactive({
   error: '',
   event: '',
 })
+const scoringFeedback = reactive({
+  loading: false,
+  event: '',
+  error: '',
+  overallScore: null,
+})
 
 const form = reactive({
   resume_id: route.query.resume_id ? Number(route.query.resume_id) : '',
@@ -87,6 +93,22 @@ const canFinish = computed(
     answeredCount.value === sortedQuestions.value.length &&
     sortedQuestions.value.length > 0,
 )
+const scoringStepIndex = computed(() => {
+  const order = {
+    scoring_started: 1,
+    scoring_done: 2,
+    report_ready: 3,
+    done: 3,
+  }
+  return order[scoringFeedback.event] || 0
+})
+const scoringStatusText = computed(() => {
+  if (scoringFeedback.error) return '生成失败'
+  if (scoringFeedback.event === 'report_ready' || scoringFeedback.event === 'done') return '报告已就绪'
+  if (scoringFeedback.event === 'scoring_done') return '评分完成'
+  if (scoringFeedback.loading) return '生成中'
+  return '等待生成'
+})
 
 let timer = null
 let questionStartedAt = Date.now()
@@ -165,6 +187,7 @@ async function pickInterview(item) {
     current.value = await interviewApi.get(item.id)
     currentIndex.value = 0
     resetAiFeedback()
+    resetScoringFeedback()
     await nextTick()
     startTimer()
     loadDraft()
@@ -204,6 +227,7 @@ async function createInterview() {
     current.value = created
     currentIndex.value = 0
     resetAiFeedback()
+    resetScoringFeedback()
     await nextTick()
     startTimer()
     loadDraft()
@@ -223,6 +247,17 @@ function resetAiFeedback() {
   aiFeedback.content = ''
   aiFeedback.error = ''
   aiFeedback.event = ''
+}
+
+function resetScoringFeedback() {
+  if (streamController) {
+    streamController.abort()
+    streamController = null
+  }
+  scoringFeedback.loading = false
+  scoringFeedback.event = ''
+  scoringFeedback.error = ''
+  scoringFeedback.overallScore = null
 }
 
 async function runFollowupStream(questionId) {
@@ -250,6 +285,54 @@ async function runFollowupStream(questionId) {
   } finally {
     if (streamController === controller) {
       aiFeedback.loading = false
+      streamController = null
+    }
+  }
+}
+
+async function runScoringStream() {
+  if (!current.value) return
+  if (streamController) streamController.abort()
+  const controller = new AbortController()
+  const interviewId = current.value.id
+  let reportReady = false
+
+  streamController = controller
+  scoringFeedback.loading = true
+  scoringFeedback.event = 'scoring_started'
+  scoringFeedback.error = ''
+  scoringFeedback.overallScore = null
+
+  try {
+    await interviewApi.stream(interviewId, {
+      params: { mode: 'scoring' },
+      signal: controller.signal,
+      onEvent: ({ event, data }) => {
+        scoringFeedback.event = event
+        if (event === 'scoring_done') scoringFeedback.overallScore = data.overall_score ?? null
+        if (event === 'report_ready') {
+          reportReady = true
+          scoringFeedback.overallScore = data.report?.overall_score ?? scoringFeedback.overallScore
+          current.value = {
+            ...current.value,
+            status: 'completed',
+            overall_score: scoringFeedback.overallScore,
+            score_report: data.report,
+          }
+        }
+        if (event === 'error') scoringFeedback.error = data.message || '评分报告生成失败'
+      },
+    })
+
+    if (reportReady && !scoringFeedback.error) {
+      ElMessage.success('评分报告已生成')
+      router.push(`/reports/${interviewId}`)
+    }
+  } catch (err) {
+    if (err?.name !== 'AbortError') scoringFeedback.error = err?.message || '评分报告生成失败'
+  } finally {
+    if (streamController === controller) {
+      scoringFeedback.loading = false
       streamController = null
     }
   }
@@ -298,10 +381,9 @@ async function finish() {
     type: 'warning',
   })
   finishing.value = true
+  resetAiFeedback()
   try {
-    current.value = await interviewApi.finish(current.value.id)
-    ElMessage.success('面试已完成，正在生成报告')
-    router.push(`/reports/${current.value.id}`)
+    await runScoringStream()
   } catch (err) {
     ElMessage.error(err?.message || '完成失败')
   } finally {
@@ -348,6 +430,7 @@ watch(
         current.value = await interviewApi.get(Number(id))
         currentIndex.value = 0
         resetAiFeedback()
+        resetScoringFeedback()
         startTimer()
         loadDraft()
       } catch (err) {
@@ -363,6 +446,7 @@ onMounted(async () => {
   if (route.params.id) {
     try {
       current.value = await interviewApi.get(Number(route.params.id))
+      resetScoringFeedback()
       startTimer()
       loadDraft()
     } catch (err) {
@@ -503,8 +587,8 @@ onUnmounted(() => {
               </el-button>
               <el-button
                 type="success"
-                :loading="finishing"
-                :disabled="!canFinish"
+                :loading="finishing || scoringFeedback.loading"
+                :disabled="!canFinish || scoringFeedback.loading"
                 @click="finish"
               >
                 <Flag :size="14" /><span style="margin-left: 4px">完成并出报告</span>
@@ -516,6 +600,38 @@ onUnmounted(() => {
             :percentage="progress"
             :format="() => `${answeredCount} / ${sortedQuestions.length}`"
           />
+
+          <div
+            v-if="scoringFeedback.loading || scoringFeedback.event || scoringFeedback.error"
+            class="scoring-feedback"
+          >
+            <div class="scoring-feedback-head">
+              <span>评分报告</span>
+              <el-tag
+                size="small"
+                :type="scoringFeedback.error ? 'danger' : scoringFeedback.loading ? 'warning' : 'success'"
+              >
+                {{ scoringStatusText }}
+              </el-tag>
+            </div>
+            <div class="scoring-steps">
+              <span :class="{ active: scoringStepIndex === 1, done: scoringStepIndex > 1 }">
+                开始评分
+              </span>
+              <span :class="{ active: scoringStepIndex === 2, done: scoringStepIndex > 2 }">
+                汇总分数
+              </span>
+              <span :class="{ active: scoringStepIndex === 3, done: scoringStepIndex >= 3 }">
+                生成报告
+              </span>
+            </div>
+            <p v-if="scoringFeedback.overallScore != null">
+              综合评分 {{ Math.round(scoringFeedback.overallScore) }}
+            </p>
+            <p v-if="scoringFeedback.error" class="scoring-feedback-error">
+              {{ scoringFeedback.error }}
+            </p>
+          </div>
 
           <el-card v-if="currentQuestion" shadow="never" class="qa">
             <div class="q-meta">
@@ -672,11 +788,64 @@ onUnmounted(() => {
 .ai-feedback-error {
   color: #b91c1c;
 }
+.scoring-feedback {
+  padding: 12px 14px;
+  border: 1px solid #fed7aa;
+  border-radius: 8px;
+  background: #fff7ed;
+}
+.scoring-feedback-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #9a3412;
+  font-size: 13px;
+  font-weight: 600;
+}
+.scoring-steps {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 10px;
+}
+.scoring-steps span {
+  min-height: 28px;
+  border: 1px solid #fed7aa;
+  border-radius: 6px;
+  background: #fff;
+  color: #9a3412;
+  font-size: 12px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+.scoring-steps span.active {
+  background: #ffedd5;
+  border-color: #fb923c;
+  font-weight: 600;
+}
+.scoring-steps span.done {
+  background: #ecfdf5;
+  border-color: #86efac;
+  color: #166534;
+}
+.scoring-feedback p {
+  margin: 8px 0 0;
+  color: #7c2d12;
+  line-height: 1.7;
+  font-size: 13px;
+}
+.scoring-feedback-error {
+  color: #b91c1c;
+}
 .qa-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
 .error-card { background: #fef2f2; border: 1px solid #fecaca; }
 .error-card strong { color: #b91c1c; }
 @media (max-width: 1024px) {
   .layout { grid-template-columns: 1fr; }
   .aside { position: static; }
+}
+@media (max-width: 640px) {
+  .scoring-steps { grid-template-columns: 1fr; }
 }
 </style>
