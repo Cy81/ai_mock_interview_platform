@@ -227,3 +227,27 @@ def test_agent_models_reject_out_of_range_scores() -> None:
 
     with pytest.raises(ValidationError):
         ScoreResult(overall_score=100.01, level="out of range")
+
+
+def test_mock_runtime_scores_and_builds_report() -> None:
+    runtime = get_interview_agent_runtime()
+    report, meta = runtime.score_interview(
+        job_title="AI 应用工程师",
+        profile={"skills": ["FastAPI"]},
+        question_answers=[
+            {
+                "position": 1,
+                "skill": "FastAPI",
+                "question": "如何设计接口？",
+                "rubric": ["结构", "测试"],
+                "answer": "我会先定义边界，再设计接口、测试、监控、降级和安全策略，并根据指标复盘。",
+                "duration_ms": 30000,
+            }
+        ],
+        knowledge_contexts=[{"id": 1, "title": "工程化", "content": "关注测试和监控。"}],
+    )
+
+    assert meta.model == "langchain-mock"
+    assert report["overall_score"] >= 70
+    assert report["question_scores"][0]["position"] == 1
+    assert report["next_practice"]

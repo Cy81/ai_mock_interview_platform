@@ -31,7 +31,6 @@ from app.models.interview import (
 from app.models.job import JobDirection
 from app.models.resume import Resume
 from app.models.user import User
-from app.services.ai_provider import get_ai_provider
 from app.services.interview_agents.runtime import get_interview_agent_runtime
 from app.services.rag_service import search
 
@@ -239,7 +238,7 @@ def finish_interview(db: Session, user: User, interview_id: int) -> Interview:
     )
 
     try:
-        report, meta = get_ai_provider().score_interview(
+        report, meta = get_interview_agent_runtime().score_interview(
             job_title=interview.job_title,
             profile=profile,
             question_answers=qa_pairs,
