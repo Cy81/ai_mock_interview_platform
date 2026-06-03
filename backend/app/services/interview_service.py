@@ -32,6 +32,7 @@ from app.models.job import JobDirection
 from app.models.resume import Resume
 from app.models.user import User
 from app.services.ai_provider import get_ai_provider
+from app.services.interview_agents.runtime import get_interview_agent_runtime
 from app.services.rag_service import search
 
 
@@ -94,7 +95,7 @@ def create_interview(
     context_payload = [c.to_context() for c in contexts]
 
     try:
-        questions, meta = get_ai_provider().generate_interview_questions(
+        questions, meta = get_interview_agent_runtime().generate_interview_questions(
             job_title=job.title,
             job_competency=job.competency_model,
             profile=profile,

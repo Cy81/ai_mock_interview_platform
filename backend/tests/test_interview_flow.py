@@ -43,6 +43,8 @@ def test_full_business_flow(client: TestClient, auth_headers: dict[str, str]) ->
     assert interview_response.status_code == 201
     interview = interview_response.json()
     assert len(interview["questions"]) == 3
+    assert all(q["rubric"] for q in interview["questions"])
+    assert all(q["difficulty"] in {"basic", "intermediate", "advanced"} for q in interview["questions"])
     assert interview["status"] == "in_progress"
 
     # 重复请求应返回相同面试
