@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
+from app.api.v1.admin.ai_config import router as ai_config_router
 from app.api.v1.admin.jobs import router as jobs_router
 from app.api.v1.admin.rag import router as rag_router
 from app.api.v1.admin.system import router as system_router
@@ -10,5 +11,6 @@ from app.api.v1.admin.system import router as system_router
 
 admin_v1_router = APIRouter()
 admin_v1_router.include_router(system_router)
+admin_v1_router.include_router(ai_config_router)
 admin_v1_router.include_router(jobs_router)
 admin_v1_router.include_router(rag_router)

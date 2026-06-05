@@ -62,6 +62,6 @@ def session_scope() -> Iterator[Session]:
 def init_db() -> None:
     """开发期建表：仅在 AUTO_CREATE_TABLES=True 时使用，生产环境用 Alembic。"""
     from app.db.base import Base
-    from app.models import interview, job, rag, resume, user  # noqa: F401
+    from app.models import ai_config, interview, job, rag, resume, user  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

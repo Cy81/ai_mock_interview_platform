@@ -112,6 +112,12 @@ const adminRoutes = [
         meta: { title: '文档管理', ragType: 'knowledge_base' },
       },
       {
+        path: 'ai-config',
+        name: 'admin-ai-config',
+        component: () => import('@/views/admin/AdminAiConfig.vue'),
+        meta: { title: '模型配置' },
+      },
+      {
         path: 'interviews',
         name: 'admin-interviews',
         component: () => import('@/views/admin/AdminInterviews.vue'),

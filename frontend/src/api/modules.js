@@ -122,4 +122,9 @@ export const adminApi = {
   reindexRagDoc: (id) => api.post(`/admin/rag/documents/${id}/reindex`),
   testRetrieve: (payload) => api.post('/admin/rag/test-retrieve', payload),
   ragStats: () => api.get('/admin/rag/stats'),
+
+  // AI 配置
+  getAiConfig: () => api.get('/admin/ai/config'),
+  updateAiConfig: (payload) => api.put('/admin/ai/config', payload),
+  testAiConfig: () => api.post('/admin/ai/config/test'),
 }

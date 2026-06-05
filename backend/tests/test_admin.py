@@ -92,6 +92,82 @@ def test_admin_can_view_rag_document_chunks(
     assert first["token_count"] >= 1
 
 
+def test_admin_can_manage_ai_model_config(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    initial = client.get("/api/v1/admin/ai/config", headers=admin_headers)
+    assert initial.status_code == 200, initial.text
+    assert initial.json()["runtime"] == "mock"
+
+    update = client.put(
+        "/api/v1/admin/ai/config",
+        headers=admin_headers,
+        json={
+            "name": "DeepSeek Production",
+            "runtime": "deepseek",
+            "provider": "deepseek",
+            "base_url": "https://api.deepseek.com",
+            "api_key": "sk-test-1234567890",
+            "model": "deepseek-chat",
+            "temperature": 0.35,
+            "max_tokens": 4096,
+            "timeout": 45.0,
+            "max_retries": 2,
+        },
+    )
+    assert update.status_code == 200, update.text
+    payload = update.json()
+    assert payload["name"] == "DeepSeek Production"
+    assert payload["runtime"] == "deepseek"
+    assert payload["provider"] == "deepseek"
+    assert payload["has_api_key"] is True
+    assert payload["api_key_masked"] == "sk-t...7890"
+    assert "api_key" not in payload
+
+    fetched = client.get("/api/v1/admin/ai/config", headers=admin_headers)
+    assert fetched.status_code == 200
+    assert fetched.json()["model"] == "deepseek-chat"
+    assert fetched.json()["temperature"] == 0.35
+
+
+def test_admin_can_test_mock_ai_model_config(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    update = client.put(
+        "/api/v1/admin/ai/config",
+        headers=admin_headers,
+        json={
+            "name": "Local Mock",
+            "runtime": "mock",
+            "provider": "mock",
+            "base_url": "",
+            "api_key": "",
+            "model": "mock-interview",
+            "temperature": 0.2,
+            "max_tokens": 2048,
+            "timeout": 10.0,
+            "max_retries": 1,
+        },
+    )
+    assert update.status_code == 200, update.text
+
+    tested = client.post("/api/v1/admin/ai/config/test", headers=admin_headers)
+    assert tested.status_code == 200, tested.text
+    payload = tested.json()
+    assert payload["ok"] is True
+    assert payload["status"] == "ok"
+    assert payload["runtime"] == "mock"
+    assert payload["model"] == "mock-interview"
+    assert payload["latency_ms"] >= 0
+
+
+def test_non_admin_cannot_access_ai_model_config(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    response = client.get("/api/v1/admin/ai/config", headers=auth_headers)
+    assert response.status_code == 403
+
+
 def test_non_admin_cannot_access_admin(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:

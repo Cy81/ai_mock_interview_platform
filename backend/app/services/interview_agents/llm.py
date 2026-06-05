@@ -10,27 +10,29 @@ from pydantic import BaseModel
 
 from app.core.config import settings
 from app.services.ai_provider import LLMResponse
+from app.services.ai_config_service import get_effective_config
 
 
 StructuredModel = TypeVar("StructuredModel", bound=BaseModel)
 
 
 def get_chat_model() -> Any | None:
-    if settings.AI_RUNTIME != "deepseek":
+    config = get_effective_config()
+    if config.runtime.value != "deepseek":
         return None
 
-    if not settings.DEEPSEEK_API_KEY:
+    if not config.api_key:
         raise RuntimeError("DEEPSEEK_API_KEY is not configured")
 
     from langchain_openai import ChatOpenAI
 
     return ChatOpenAI(
-        api_key=settings.DEEPSEEK_API_KEY,
-        base_url=settings.DEEPSEEK_BASE_URL,
-        model=settings.DEEPSEEK_MODEL,
-        temperature=settings.AI_TEMPERATURE,
-        timeout=settings.AI_TIMEOUT,
-        max_tokens=settings.AI_MAX_TOKENS,
+        api_key=config.api_key,
+        base_url=config.base_url,
+        model=config.model,
+        temperature=config.temperature,
+        timeout=config.timeout,
+        max_tokens=config.max_tokens,
     )
 
 
@@ -56,5 +58,5 @@ def invoke_structured(
     return parsed, LLMResponse(
         content=content,
         latency_ms=round(latency_ms, 2),
-        model=settings.DEEPSEEK_MODEL,
+        model=get_effective_config().model,
     )

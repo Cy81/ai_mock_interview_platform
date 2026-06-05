@@ -1,4 +1,5 @@
 """集中导出所有 ORM 模型，便于 Alembic autogenerate 与依赖注入。"""
+from app.models.ai_config import AIModelConfig, AIProvider, AIRuntime
 from app.models.interview import (
     Difficulty,
     Interview,
@@ -14,6 +15,9 @@ from app.models.user import User, UserRole
 
 __all__ = [
     "Difficulty",
+    "AIModelConfig",
+    "AIProvider",
+    "AIRuntime",
     "IndexStatus",
     "Interview",
     "InterviewAnswer",
