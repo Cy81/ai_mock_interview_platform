@@ -127,4 +127,6 @@ export const adminApi = {
   getAiConfig: () => api.get('/admin/ai/config'),
   updateAiConfig: (payload) => api.put('/admin/ai/config', payload),
   testAiConfig: () => api.post('/admin/ai/config/test'),
+  getAiUsageSummary: (params = {}) => api.get('/admin/ai/usage/summary', { params }),
+  listAiUsage: (params = {}) => api.get('/admin/ai/usage', { params }),
 }

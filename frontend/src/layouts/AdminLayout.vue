@@ -3,6 +3,7 @@ import { computed } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import {
   Activity,
+  BarChart3,
   Briefcase,
   BookOpenCheck,
   FileStack,
@@ -25,6 +26,7 @@ const menus = [
   { to: '/admin/questions', label: '题库管理', icon: BookOpenCheck },
   { to: '/admin/documents', label: '文档管理', icon: FileStack },
   { to: '/admin/ai-config', label: '模型配置', icon: SlidersHorizontal },
+  { to: '/admin/ai-usage', label: '用量观测', icon: BarChart3 },
   { to: '/admin/interviews', label: '面试记录', icon: Activity },
 ]
 

@@ -161,6 +161,65 @@ def test_admin_can_test_mock_ai_model_config(
     assert payload["latency_ms"] >= 0
 
 
+def test_admin_can_view_ai_usage_after_model_test(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    update = client.put(
+        "/api/v1/admin/ai/config",
+        headers=admin_headers,
+        json={
+            "name": "Observable Mock",
+            "runtime": "mock",
+            "provider": "mock",
+            "base_url": "",
+            "api_key": "",
+            "model": "mock-observable",
+            "temperature": 0.2,
+            "max_tokens": 2048,
+            "timeout": 10.0,
+            "max_retries": 1,
+        },
+    )
+    assert update.status_code == 200, update.text
+
+    tested = client.post("/api/v1/admin/ai/config/test", headers=admin_headers)
+    assert tested.status_code == 200, tested.text
+
+    summary = client.get("/api/v1/admin/ai/usage/summary", headers=admin_headers)
+    assert summary.status_code == 200, summary.text
+    totals = summary.json()
+    assert totals["total_calls"] >= 1
+    assert totals["success_calls"] >= 1
+    assert totals["failed_calls"] == 0
+    assert totals["total_tokens"] == 0
+    assert totals["avg_latency_ms"] >= 0
+    assert totals["by_model"][0]["model"] == "mock-observable"
+
+    logs = client.get(
+        "/api/v1/admin/ai/usage",
+        headers=admin_headers,
+        params={"feature": "config_test"},
+    )
+    assert logs.status_code == 200, logs.text
+    payload = logs.json()
+    assert payload["total"] >= 1
+    first = payload["items"][0]
+    assert first["feature"] == "config_test"
+    assert first["runtime"] == "mock"
+    assert first["provider"] == "mock"
+    assert first["model"] == "mock-observable"
+    assert first["status"] == "ok"
+    assert first["latency_ms"] >= 0
+    assert first["total_tokens"] == 0
+
+
+def test_non_admin_cannot_access_ai_usage(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    response = client.get("/api/v1/admin/ai/usage/summary", headers=auth_headers)
+    assert response.status_code == 403
+
+
 def test_non_admin_cannot_access_ai_model_config(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:

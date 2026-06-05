@@ -1,7 +1,7 @@
 """数据库连接池与 Session 管理。
 
 - PostgreSQL 走真实连接池，参数从配置读取；
-- SQLite（dev/test）使用 StaticPool；
+- SQLite 内存库使用 StaticPool，文件库使用 SQLAlchemy 默认池；
 - 提供 `get_db` 依赖与 `session_scope` 上下文，前者用于 FastAPI，后者用于 Celery / 脚本。
 """
 from __future__ import annotations
@@ -10,19 +10,27 @@ from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from app.core.config import settings
 
 
+def _is_memory_sqlite_url(database_url: str) -> bool:
+    url = make_url(database_url)
+    return url.database in (None, "", ":memory:")
+
+
 def _build_engine_kwargs() -> dict:
     if settings.is_sqlite:
-        return {
+        kwargs = {
             "connect_args": {"check_same_thread": False},
-            "poolclass": StaticPool,
             "pool_pre_ping": True,
         }
+        if _is_memory_sqlite_url(settings.DATABASE_URL):
+            kwargs["poolclass"] = StaticPool
+        return kwargs
     return {
         "pool_size": settings.DB_POOL_SIZE,
         "max_overflow": settings.DB_MAX_OVERFLOW,
@@ -62,6 +70,6 @@ def session_scope() -> Iterator[Session]:
 def init_db() -> None:
     """开发期建表：仅在 AUTO_CREATE_TABLES=True 时使用，生产环境用 Alembic。"""
     from app.db.base import Base
-    from app.models import ai_config, interview, job, rag, resume, user  # noqa: F401
+    from app.models import ai_config, ai_usage, interview, job, rag, resume, user  # noqa: F401
 
     Base.metadata.create_all(bind=engine)

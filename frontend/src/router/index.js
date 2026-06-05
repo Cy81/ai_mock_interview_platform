@@ -118,6 +118,12 @@ const adminRoutes = [
         meta: { title: '模型配置' },
       },
       {
+        path: 'ai-usage',
+        name: 'admin-ai-usage',
+        component: () => import('@/views/admin/AdminAiUsage.vue'),
+        meta: { title: '用量观测' },
+      },
+      {
         path: 'interviews',
         name: 'admin-interviews',
         component: () => import('@/views/admin/AdminInterviews.vue'),

@@ -10,7 +10,9 @@ from sqlalchemy.orm import Session
 
 from app.core.config import settings
 from app.models.ai_config import AIModelConfig, AIProvider, AIRuntime
+from app.models.ai_usage import AIUsageStatus
 from app.schemas.ai_config import AIModelConfigRead, AIModelConfigUpdate, AIModelTestResult
+from app.services import ai_usage_service
 
 
 logger = structlog.get_logger("ai.config")
@@ -100,6 +102,15 @@ def test_active_config(db: Session) -> AIModelTestResult:
     latency_ms = round((time.perf_counter() - start) * 1000, 2)
     status = "ok" if ok else "failed"
     _persist_test_result(db, status=status, latency_ms=latency_ms, error=error)
+    ai_usage_service.record_ai_usage_safely(
+        feature="config_test",
+        runtime=config.runtime,
+        provider=config.provider,
+        model=config.model,
+        status=AIUsageStatus.OK if ok else AIUsageStatus.FAILED,
+        latency_ms=latency_ms,
+        error=error,
+    )
     return AIModelTestResult(
         ok=ok,
         status=status,

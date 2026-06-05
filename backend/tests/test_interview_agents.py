@@ -4,14 +4,17 @@ import json
 from types import SimpleNamespace
 
 import pytest
+from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.language_models.fake_chat_models import FakeListChatModel
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 
 import app.services.interview_agents.followup as followup_module
 import app.services.interview_agents.llm as agent_llm
 import app.services.interview_agents.question_generator as question_generator
 import app.services.interview_agents.scoring as scoring_module
 from app.services.ai_provider import LLMResponse
+from app.models.ai_config import AIProvider, AIRuntime
+from app.models.ai_usage import AIUsageStatus
 from app.services.interview_agents.events import format_sse
 from app.services.interview_agents.followup import FollowupAgent
 from app.services.interview_agents.models import (
@@ -26,6 +29,10 @@ from app.services.interview_agents.planner import InterviewPlannerAgent
 from app.services.interview_agents.question_generator import QuestionGenerationAgent
 from app.services.interview_agents.runtime import get_interview_agent_runtime
 from app.services.interview_agents.scoring import ScoringAgent
+
+
+class ProbeResult(BaseModel):
+    answer: str
 
 
 def test_mock_runtime_generates_questions_with_langchain_facade() -> None:
@@ -48,12 +55,67 @@ def test_mock_runtime_generates_questions_with_langchain_facade() -> None:
 def test_deepseek_chat_model_requires_deepseek_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-openai-fallback")
-    monkeypatch.setattr(agent_llm.settings, "AI_RUNTIME", "deepseek")
-    monkeypatch.setattr(agent_llm.settings, "DEEPSEEK_API_KEY", None)
+    monkeypatch.setattr(
+        agent_llm,
+        "get_effective_config",
+        lambda: SimpleNamespace(
+            runtime=AIRuntime.DEEPSEEK,
+            provider=AIProvider.DEEPSEEK,
+            base_url="https://api.deepseek.com",
+            api_key="",
+            model="deepseek-chat",
+            temperature=0.2,
+            timeout=60,
+            max_tokens=2048,
+        ),
+    )
 
     with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY is not configured"):
         agent_llm.get_chat_model()
+
+
+def test_langchain_structured_invocation_records_ai_usage(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[dict] = []
+    monkeypatch.setattr(
+        agent_llm,
+        "get_effective_config",
+        lambda: SimpleNamespace(
+            runtime=AIRuntime.DEEPSEEK,
+            provider=AIProvider.DEEPSEEK,
+            model="deepseek-test",
+        ),
+    )
+    monkeypatch.setattr(
+        agent_llm,
+        "get_chat_model",
+        lambda: FakeListChatModel(responses=['{"answer":"ok"}']),
+    )
+    monkeypatch.setattr(
+        agent_llm.ai_usage_service,
+        "record_ai_usage_safely",
+        lambda **kwargs: records.append(kwargs),
+    )
+    prompt = ChatPromptTemplate.from_messages(
+        [("human", "{question}\n{format_instructions}")]
+    )
+
+    parsed, meta = agent_llm.invoke_structured(
+        prompt,
+        ProbeResult,
+        {"question": "ping"},
+    )
+
+    assert parsed.answer == "ok"
+    assert meta.model == "deepseek-test"
+    assert records
+    assert records[0]["feature"] == "interview_agent"
+    assert records[0]["runtime"] == AIRuntime.DEEPSEEK
+    assert records[0]["provider"] == AIProvider.DEEPSEEK
+    assert records[0]["model"] == "deepseek-test"
+    assert records[0]["status"] == AIUsageStatus.OK
+    assert records[0]["latency_ms"] >= 0
 
 
 def test_deepseek_question_generation_limits_result_to_requested_count(
