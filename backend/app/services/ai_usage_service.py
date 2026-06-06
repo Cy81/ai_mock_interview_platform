@@ -10,7 +10,14 @@ from sqlalchemy.orm import Session
 
 from app.models.ai_config import AIProvider, AIRuntime
 from app.models.ai_usage import AIUsageLog, AIUsageStatus
-from app.schemas.ai_usage import AIUsageLogRead, AIUsageModelBucket, AIUsageSummary
+from app.models.interview import Interview, InterviewStatus
+from app.schemas.ai_usage import (
+    AIFailureOverview,
+    AIUsageLogRead,
+    AIUsageModelBucket,
+    AIUsageSummary,
+    FailedInterviewRead,
+)
 
 
 logger = structlog.get_logger("ai.usage")
@@ -139,6 +146,63 @@ def summarize_usage(db: Session, *, days: int = 7) -> AIUsageSummary:
         completion_tokens=completion_tokens,
         avg_latency_ms=avg_latency_ms,
         by_model=by_model,
+    )
+
+
+def get_failure_overview(db: Session, *, days: int = 7, limit: int = 20) -> AIFailureOverview:
+    since = datetime.utcnow() - timedelta(days=max(days, 1))
+    safe_limit = max(1, min(limit, 100))
+
+    total_ai_calls = db.scalar(
+        select(func.count(AIUsageLog.id)).where(AIUsageLog.created_at >= since)
+    ) or 0
+    failed_ai_calls = db.scalar(
+        select(func.count(AIUsageLog.id)).where(
+            AIUsageLog.created_at >= since,
+            AIUsageLog.status == AIUsageStatus.FAILED,
+        )
+    ) or 0
+    failed_interviews = db.scalar(
+        select(func.count(Interview.id)).where(
+            Interview.created_at >= since,
+            Interview.status == InterviewStatus.FAILED,
+        )
+    ) or 0
+
+    recent_ai_failures = list(
+        db.scalars(
+            select(AIUsageLog)
+            .where(
+                AIUsageLog.created_at >= since,
+                AIUsageLog.status == AIUsageStatus.FAILED,
+            )
+            .order_by(AIUsageLog.created_at.desc(), AIUsageLog.id.desc())
+            .limit(safe_limit)
+        ).all()
+    )
+    recent_failed_interviews = list(
+        db.scalars(
+            select(Interview)
+            .where(
+                Interview.created_at >= since,
+                Interview.status == InterviewStatus.FAILED,
+            )
+            .order_by(Interview.created_at.desc(), Interview.id.desc())
+            .limit(safe_limit)
+        ).all()
+    )
+
+    failure_rate = round((failed_ai_calls / total_ai_calls) * 100, 2) if total_ai_calls else 0.0
+    return AIFailureOverview(
+        total_ai_calls=total_ai_calls,
+        failed_ai_calls=failed_ai_calls,
+        failed_interviews=failed_interviews,
+        failure_rate=failure_rate,
+        recent_ai_failures=to_read_items(recent_ai_failures),
+        recent_failed_interviews=[
+            FailedInterviewRead.model_validate(item)
+            for item in recent_failed_interviews
+        ],
     )
 
 

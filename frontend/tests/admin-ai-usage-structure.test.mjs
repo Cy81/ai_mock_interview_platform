@@ -29,3 +29,28 @@ test('admin ai usage page exposes summary cards and usage log table', () => {
   assert.match(source, /getAiUsageSummary/)
   assert.match(source, /listAiUsage/)
 })
+
+test('admin navigation exposes failure and exception monitoring', () => {
+  const layout = read('src/layouts/AdminLayout.vue')
+  const router = read('src/router/index.js')
+  const modules = read('src/api/modules.js')
+
+  assert.match(layout, /异常监控/)
+  assert.match(layout, /\/admin\/ai-failures/)
+  assert.match(router, /admin-ai-failures/)
+  assert.match(router, /AdminAiFailures\.vue/)
+  assert.match(modules, /getAiFailureOverview/)
+})
+
+test('admin ai failures page exposes failure summary and investigation tables', () => {
+  const source = read('src/views/admin/AdminAiFailures.vue')
+
+  assert.match(source, /ai-failures-admin/)
+  assert.match(source, /failure-summary-grid/)
+  assert.match(source, /failed-ai-log-table/)
+  assert.match(source, /failed-interview-table/)
+  assert.match(source, /getAiFailureOverview/)
+  assert.match(source, /异常监控/)
+  assert.match(source, /失败调用/)
+  assert.match(source, /失败面试/)
+})

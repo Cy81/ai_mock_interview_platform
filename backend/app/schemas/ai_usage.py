@@ -46,3 +46,24 @@ class AIUsageSummary(BaseModel):
     completion_tokens: int
     avg_latency_ms: float
     by_model: list[AIUsageModelBucket]
+
+
+class FailedInterviewRead(BaseModel):
+    id: int
+    user_id: int
+    job_code: str
+    job_title: str
+    status: str
+    status_reason: str | None = None
+    created_at: datetime
+
+    model_config = {"from_attributes": True}
+
+
+class AIFailureOverview(BaseModel):
+    total_ai_calls: int
+    failed_ai_calls: int
+    failed_interviews: int
+    failure_rate: float
+    recent_ai_failures: list[AIUsageLogRead]
+    recent_failed_interviews: list[FailedInterviewRead]

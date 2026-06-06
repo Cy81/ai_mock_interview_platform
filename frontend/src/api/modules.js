@@ -129,4 +129,6 @@ export const adminApi = {
   testAiConfig: () => api.post('/admin/ai/config/test'),
   getAiUsageSummary: (params = {}) => api.get('/admin/ai/usage/summary', { params }),
   listAiUsage: (params = {}) => api.get('/admin/ai/usage', { params }),
+  getAiFailureOverview: (params = {}) =>
+    api.get('/admin/ai/failures/overview', { params }),
 }

@@ -213,6 +213,55 @@ def test_admin_can_view_ai_usage_after_model_test(
     assert first["total_tokens"] == 0
 
 
+def test_admin_can_monitor_ai_failures_and_failed_interviews(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    from app.db.session import SessionLocal
+    from app.models.ai_config import AIProvider, AIRuntime
+    from app.models.ai_usage import AIUsageStatus
+    from app.models.interview import Interview, InterviewStatus
+    from app.services import ai_usage_service
+
+    with SessionLocal() as db:
+        ai_usage_service.record_ai_usage(
+            db,
+            feature="interview_agent",
+            runtime=AIRuntime.DEEPSEEK,
+            provider=AIProvider.DEEPSEEK,
+            model="deepseek-chat",
+            status=AIUsageStatus.FAILED,
+            latency_ms=1530,
+            error="upstream timeout",
+            request_id="req-failed-001",
+        )
+        failed = Interview(
+            user_id=1,
+            resume_id=1,
+            job_code="python_backend",
+            job_title="Python 后端工程师",
+            status=InterviewStatus.FAILED,
+            question_count=3,
+            status_reason="出题失败：upstream timeout",
+        )
+        db.add(failed)
+        db.commit()
+
+    response = client.get(
+        "/api/v1/admin/ai/failures/overview",
+        headers=admin_headers,
+        params={"days": 30},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["failed_ai_calls"] >= 1
+    assert payload["failed_interviews"] >= 1
+    assert payload["recent_ai_failures"][0]["status"] == "failed"
+    assert payload["recent_ai_failures"][0]["error"] == "upstream timeout"
+    assert payload["recent_failed_interviews"][0]["status"] == "failed"
+    assert "upstream timeout" in payload["recent_failed_interviews"][0]["status_reason"]
+    assert payload["failure_rate"] >= 0
+
+
 def test_non_admin_cannot_access_ai_usage(
     client: TestClient, auth_headers: dict[str, str]
 ) -> None:

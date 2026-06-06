@@ -124,6 +124,12 @@ const adminRoutes = [
         meta: { title: '用量观测' },
       },
       {
+        path: 'ai-failures',
+        name: 'admin-ai-failures',
+        component: () => import('@/views/admin/AdminAiFailures.vue'),
+        meta: { title: '异常监控' },
+      },
+      {
         path: 'interviews',
         name: 'admin-interviews',
         component: () => import('@/views/admin/AdminInterviews.vue'),

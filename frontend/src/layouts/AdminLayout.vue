@@ -6,6 +6,7 @@ import {
   BarChart3,
   Briefcase,
   BookOpenCheck,
+  CircleAlert,
   FileStack,
   Home,
   LogOut,
@@ -27,6 +28,7 @@ const menus = [
   { to: '/admin/documents', label: '文档管理', icon: FileStack },
   { to: '/admin/ai-config', label: '模型配置', icon: SlidersHorizontal },
   { to: '/admin/ai-usage', label: '用量观测', icon: BarChart3 },
+  { to: '/admin/ai-failures', label: '异常监控', icon: CircleAlert },
   { to: '/admin/interviews', label: '面试记录', icon: Activity },
 ]
 
