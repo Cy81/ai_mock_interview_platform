@@ -1,9 +1,9 @@
 <script setup>
 /**
  * 模拟面试主控台：
- *  - 左：会话列表 + 新建表单（resume + job + 题量 + 幂等 key 防抖）；
- *  - 右：串行 Q&A——一次只展示一道题，进度条 + 计时器 + 字数；
- *  - 草稿：每题作答自动写入 localStorage（key=interview:{id}:answer:{qid}）；
+ *  - 左：会话列表 + 新建表单（resume + job + 轮次 + 幂等 key 防抖）；
+ *  - 右：AI 面试官与候选人的连续消息流，发送后自动进入下一轮；
+ *  - 草稿：当前轮回复自动写入 localStorage（key=interview:{id}:answer:{qid}）；
  *  - 路由 query 支持 resume_id / job_code 预填（来自 JobRecommend 跳转）。
  */
 import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue'
@@ -11,13 +11,12 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CheckCircle2,
-  ChevronLeft,
-  ChevronRight,
   Clock,
   Flag,
   MessageSquarePlus,
   Pencil,
   Save,
+  SendHorizontal,
   Trash2,
 } from 'lucide-vue-next'
 import { interviewApi, jobApi, resumeApi } from '@/api/modules'
@@ -37,6 +36,8 @@ const finishing = ref(false)
 const creating = ref(false)
 const loading = ref(false)
 const sidebarLoading = ref(false)
+const chatRoomRef = ref(null)
+const feedbackByQuestion = reactive({})
 const aiFeedback = reactive({
   loading: false,
   content: '',
@@ -86,6 +87,20 @@ const progress = computed(() =>
     : 0,
 )
 const charCount = computed(() => draftAnswer.value.length)
+const isReadonly = computed(() =>
+  ['completed', 'cancelled', 'failed'].includes(current.value?.status),
+)
+const awaitingInterviewer = computed(() => aiFeedback.loading)
+const isCurrentAnswered = computed(() =>
+  !!currentQuestion.value && answeredMap.value.has(currentQuestion.value.id),
+)
+const composerDisabled = computed(() =>
+  isReadonly.value ||
+  submitting.value ||
+  awaitingInterviewer.value ||
+  !currentQuestion.value ||
+  isCurrentAnswered.value,
+)
 const canFinish = computed(
   () =>
     !!current.value &&
@@ -93,6 +108,53 @@ const canFinish = computed(
     answeredCount.value === sortedQuestions.value.length &&
     sortedQuestions.value.length > 0,
 )
+const currentTurnText = computed(() => {
+  if (!current.value) return ''
+  if (isReadonly.value) return statusMeta[current.value.status]?.label || '面试已结束'
+  if (canFinish.value) return '对话已完成，可以生成评分报告'
+  if (awaitingInterviewer.value) return 'AI 面试官正在思考'
+  return `正在进行第 ${currentIndex.value + 1} 轮对话`
+})
+const conversationTurns = computed(() => {
+  const turns = []
+  sortedQuestions.value.forEach((question, index) => {
+    const answer = answeredMap.value.get(question.id)
+    const feedback = feedbackByQuestion[question.id]
+    const shouldReveal = index <= currentIndex.value || !!answer || !!feedback
+    if (!shouldReveal) return
+
+    turns.push({
+      id: `question-${question.id}`,
+      role: 'interviewer',
+      type: 'question',
+      question,
+      eyebrow: `AI 面试官 · 第 ${question.position} 轮`,
+    })
+
+    if (answer) {
+      turns.push({
+        id: `answer-${question.id}`,
+        role: 'candidate',
+        type: 'answer',
+        question,
+        answer,
+        eyebrow: '我的回应',
+      })
+    }
+
+    if (feedback?.loading || feedback?.content || feedback?.error) {
+      turns.push({
+        id: `feedback-${question.id}`,
+        role: 'interviewer',
+        type: 'feedback',
+        question,
+        feedback,
+        eyebrow: 'AI 面试官',
+      })
+    }
+  })
+  return turns
+})
 const scoringStepIndex = computed(() => {
   const order = {
     scoring_started: 1,
@@ -155,6 +217,18 @@ function saveDraft() {
 }
 watch(draftAnswer, () => saveDraft())
 
+function scrollConversationToBottom() {
+  nextTick(() => {
+    const el = chatRoomRef.value
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
+
+function syncCurrentIndexFromAnswers() {
+  const nextUnanswered = sortedQuestions.value.findIndex((q) => !answeredMap.value.has(q.id))
+  currentIndex.value = nextUnanswered === -1 ? Math.max(sortedQuestions.value.length - 1, 0) : nextUnanswered
+}
+
 function unwrap(resp) {
   if (Array.isArray(resp)) return resp
   if (resp && Array.isArray(resp.items)) return resp.items
@@ -185,8 +259,8 @@ async function pickInterview(item) {
   loading.value = true
   try {
     current.value = await interviewApi.get(item.id)
-    currentIndex.value = 0
-    resetAiFeedback()
+    syncCurrentIndexFromAnswers()
+    resetConversationFeedback()
     resetScoringFeedback()
     await nextTick()
     startTimer()
@@ -226,7 +300,7 @@ async function createInterview() {
     interviews.value = [created, ...interviews.value]
     current.value = created
     currentIndex.value = 0
-    resetAiFeedback()
+    resetConversationFeedback()
     resetScoringFeedback()
     await nextTick()
     startTimer()
@@ -249,6 +323,11 @@ function resetAiFeedback() {
   aiFeedback.event = ''
 }
 
+function resetConversationFeedback() {
+  Object.keys(feedbackByQuestion).forEach((key) => delete feedbackByQuestion[key])
+  resetAiFeedback()
+}
+
 function resetScoringFeedback() {
   if (streamController) {
     streamController.abort()
@@ -269,20 +348,40 @@ async function runFollowupStream(questionId) {
   aiFeedback.content = ''
   aiFeedback.error = ''
   aiFeedback.event = 'followup_started'
+  feedbackByQuestion[questionId] = {
+    loading: true,
+    content: '',
+    error: '',
+  }
+  scrollConversationToBottom()
   try {
     await interviewApi.stream(current.value.id, {
       params: { mode: 'followup', question_id: questionId },
       signal: controller.signal,
       onEvent: ({ event, data }) => {
         aiFeedback.event = event
-        if (event === 'followup_delta') aiFeedback.content += data.content || ''
-        if (event === 'followup_done') aiFeedback.content = data.content || aiFeedback.content
-        if (event === 'error') aiFeedback.error = data.message || 'AI 追问生成失败'
+        if (event === 'followup_delta') {
+          aiFeedback.content += data.content || ''
+          feedbackByQuestion[questionId].content += data.content || ''
+          scrollConversationToBottom()
+        }
+        if (event === 'followup_done') {
+          aiFeedback.content = data.content || aiFeedback.content
+          feedbackByQuestion[questionId].content = data.content || feedbackByQuestion[questionId].content
+        }
+        if (event === 'error') {
+          aiFeedback.error = data.message || 'AI 追问生成失败'
+          feedbackByQuestion[questionId].error = aiFeedback.error
+        }
       },
     })
   } catch (err) {
-    if (err?.name !== 'AbortError') aiFeedback.error = err?.message || 'AI 追问生成失败'
+    if (err?.name !== 'AbortError') {
+      aiFeedback.error = err?.message || 'AI 追问生成失败'
+      feedbackByQuestion[questionId].error = aiFeedback.error
+    }
   } finally {
+    if (feedbackByQuestion[questionId]) feedbackByQuestion[questionId].loading = false
     if (streamController === controller) {
       aiFeedback.loading = false
       streamController = null
@@ -338,7 +437,26 @@ async function runScoringStream() {
   }
 }
 
-async function submitAnswer() {
+function advanceToNextQuestion(answeredQuestionId) {
+  const answeredIndex = sortedQuestions.value.findIndex((q) => q.id === answeredQuestionId)
+  const nextIndex = sortedQuestions.value.findIndex(
+    (q, index) => index > answeredIndex && !answeredMap.value.has(q.id),
+  )
+  if (nextIndex === -1) {
+    currentIndex.value = Math.max(answeredIndex, 0)
+    draftAnswer.value = ''
+    stopTimer()
+    scrollConversationToBottom()
+    return
+  }
+  currentIndex.value = nextIndex
+  startTimer()
+  loadDraft()
+  scrollConversationToBottom()
+}
+
+async function sendAnswer() {
+  if (composerDisabled.value) return
   if (!currentQuestion.value) return
   const text = draftAnswer.value.trim()
   if (text.length < 5) {
@@ -356,22 +474,14 @@ async function submitAnswer() {
     const answeredQuestionId = currentQuestion.value.id
     current.value = updated
     localStorage.removeItem(draftKey(current.value.id, answeredQuestionId))
-    ElMessage.success('已提交')
+    draftAnswer.value = ''
     await runFollowupStream(answeredQuestionId)
+    advanceToNextQuestion(answeredQuestionId)
   } catch (err) {
-    ElMessage.error(err?.message || '提交失败')
+    ElMessage.error(err?.message || '发送失败')
   } finally {
     submitting.value = false
   }
-}
-
-function go(delta) {
-  const next = currentIndex.value + delta
-  if (next < 0 || next >= sortedQuestions.value.length) return
-  currentIndex.value = next
-  resetAiFeedback()
-  startTimer()
-  loadDraft()
 }
 
 async function finish() {
@@ -428,8 +538,8 @@ watch(
     if (id) {
       try {
         current.value = await interviewApi.get(Number(id))
-        currentIndex.value = 0
-        resetAiFeedback()
+        syncCurrentIndexFromAnswers()
+        resetConversationFeedback()
         resetScoringFeedback()
         startTimer()
         loadDraft()
@@ -446,6 +556,8 @@ onMounted(async () => {
   if (route.params.id) {
     try {
       current.value = await interviewApi.get(Number(route.params.id))
+      syncCurrentIndexFromAnswers()
+      resetConversationFeedback()
       resetScoringFeedback()
       startTimer()
       loadDraft()
@@ -497,7 +609,7 @@ onUnmounted(() => {
                 />
               </el-select>
             </el-form-item>
-            <el-form-item label="题量">
+            <el-form-item label="对话轮次">
               <el-input-number v-model="form.question_count" :min="1" :max="12" />
             </el-form-item>
             <el-button
@@ -507,7 +619,7 @@ onUnmounted(() => {
               style="width: 100%"
               @click="createInterview"
             >
-              生成题目并开始
+              开始 AI 面试
             </el-button>
             <p v-if="!resumes.length" class="muted hint">
               暂无已解析简历，<el-button text type="primary" @click="router.push('/resumes')">去上传</el-button>
@@ -552,7 +664,7 @@ onUnmounted(() => {
         </el-card>
       </aside>
 
-      <!-- 右侧：考场 -->
+      <!-- 右侧：AI 面试官对话 -->
       <main class="stage">
         <el-empty
           v-if="!current"
@@ -570,7 +682,7 @@ onUnmounted(() => {
                 </el-tag>
               </p>
               <h2>
-                第 {{ currentIndex + 1 }} 题 / 共 {{ sortedQuestions.length }} 题
+                AI 对话式面试
                 <el-tag size="small" effect="plain" type="info">
                   <Clock :size="12" /> {{ formatElapsed(elapsed) }}
                 </el-tag>
@@ -633,99 +745,110 @@ onUnmounted(() => {
             </p>
           </div>
 
-          <section v-if="currentQuestion" class="chat-room">
-            <article class="message-row interviewer-message">
-              <div class="avatar ai-avatar">AI</div>
-              <div class="message-bubble">
-                <div class="q-meta">
-                  <el-tag size="small" type="primary">{{ currentQuestion.type }}</el-tag>
-                  <el-tag size="small" type="warning">{{ currentQuestion.difficulty }}</el-tag>
-                  <el-tag size="small">{{ currentQuestion.skill }}</el-tag>
-                  <span class="muted">题号 #{{ currentQuestion.position }}</span>
+          <section v-if="currentQuestion" class="chat-room conversation-flow">
+            <div class="conversation-status">
+              <span>{{ currentTurnText }}</span>
+              <el-tag v-if="currentQuestion" size="small" effect="plain">
+                {{ currentQuestion.skill }}
+              </el-tag>
+            </div>
+
+            <div ref="chatRoomRef" class="conversation-thread">
+              <article
+                v-for="turn in conversationTurns"
+                :key="turn.id"
+                class="message-row"
+                :class="turn.role === 'candidate' ? 'candidate-message' : 'interviewer-message'"
+              >
+                <div v-if="turn.role !== 'candidate'" class="avatar ai-avatar">AI</div>
+
+                <div class="message-bubble" :class="{ 'feedback-bubble': turn.type === 'feedback' }">
+                  <div v-if="turn.type === 'question'" class="message-kicker">
+                    <span>{{ turn.eyebrow }}</span>
+                    <div class="q-meta">
+                      <el-tag size="small" type="primary">{{ turn.question.type }}</el-tag>
+                      <el-tag size="small" type="warning">{{ turn.question.difficulty }}</el-tag>
+                    </div>
+                  </div>
+
+                  <template v-if="turn.type === 'question'">
+                    <p class="interviewer-copy">{{ turn.question.question }}</p>
+                    <el-collapse v-if="turn.question.rubric?.length" class="rubric-collapse">
+                      <el-collapse-item title="面试官观察点">
+                        <ul class="rubric">
+                          <li v-for="r in turn.question.rubric" :key="r">{{ r }}</li>
+                        </ul>
+                      </el-collapse-item>
+                    </el-collapse>
+                  </template>
+
+                  <template v-else-if="turn.type === 'answer'">
+                    <div class="submitted-head">
+                      <span><CheckCircle2 :size="14" /> {{ turn.eyebrow }}</span>
+                      <span v-if="turn.answer?.score != null">{{ turn.answer.score }} 分</span>
+                    </div>
+                    <p>{{ turn.answer?.answer }}</p>
+                    <small v-if="turn.answer?.comment">{{ turn.answer.comment }}</small>
+                  </template>
+
+                  <template v-else>
+                    <div class="ai-feedback-head">
+                      <span>{{ turn.eyebrow }}追问与反馈</span>
+                      <el-tag v-if="turn.feedback?.loading" size="small" type="warning">
+                        AI 面试官正在思考
+                      </el-tag>
+                      <el-tag v-else size="small" type="success">已回应</el-tag>
+                    </div>
+                    <p v-if="turn.feedback?.content">{{ turn.feedback.content }}</p>
+                    <p v-if="turn.feedback?.error" class="ai-feedback-error">
+                      {{ turn.feedback.error }}
+                    </p>
+                  </template>
                 </div>
-                <h3 class="q-text">{{ currentQuestion.question }}</h3>
 
-                <el-collapse v-if="currentQuestion.rubric?.length" class="rubric-collapse">
-                  <el-collapse-item title="评分要点">
-                    <ul class="rubric">
-                      <li v-for="r in currentQuestion.rubric" :key="r">{{ r }}</li>
-                    </ul>
-                  </el-collapse-item>
-                </el-collapse>
-              </div>
-            </article>
+                <div v-if="turn.role === 'candidate'" class="avatar user-avatar">我</div>
+              </article>
 
-            <article
-              v-if="answeredMap.has(currentQuestion.id)"
-              class="message-row candidate-message"
-            >
-              <div class="message-bubble">
-                <div class="submitted-head">
-                  <span><CheckCircle2 :size="14" /> 已提交</span>
-                  <span v-if="answeredMap.get(currentQuestion.id)?.score != null">
-                    {{ answeredMap.get(currentQuestion.id).score }} 分
-                  </span>
+              <article v-if="canFinish" class="message-row interviewer-message">
+                <div class="avatar ai-avatar">AI</div>
+                <div class="message-bubble final-bubble">
+                  <div class="ai-feedback-head">
+                    <span>AI 面试官</span>
+                    <el-tag size="small" type="success">对话完成</el-tag>
+                  </div>
+                  <p>这轮面试已经结束。点击右上角生成综合评分报告，我会汇总你的回答表现。</p>
                 </div>
-                <p>{{ answeredMap.get(currentQuestion.id)?.answer }}</p>
-                <small v-if="answeredMap.get(currentQuestion.id)?.comment">
-                  {{ answeredMap.get(currentQuestion.id).comment }}
-                </small>
-              </div>
-              <div class="avatar user-avatar">我</div>
-            </article>
+              </article>
+            </div>
 
-            <article
-              v-if="aiFeedback.loading || aiFeedback.content || aiFeedback.error"
-              class="message-row interviewer-message"
-            >
-              <div class="avatar ai-avatar">AI</div>
-              <div class="message-bubble feedback-bubble">
-                <div class="ai-feedback-head">
-                  <span>AI 面试官反馈</span>
-                  <el-tag v-if="aiFeedback.loading" size="small" type="warning">生成中</el-tag>
-                  <el-tag v-else size="small" type="success">已生成</el-tag>
-                </div>
-                <p v-if="aiFeedback.content">{{ aiFeedback.content }}</p>
-                <p v-if="aiFeedback.error" class="ai-feedback-error">{{ aiFeedback.error }}</p>
-              </div>
-            </article>
-
-            <section class="answer-composer">
+            <section v-if="!canFinish" class="answer-composer">
               <div class="answer-head">
-                <span><Pencil :size="14" /> 输入你的回答</span>
+                <span><Pencil :size="14" /> 回复 AI 面试官</span>
                 <span class="muted">{{ charCount }} / 8000</span>
               </div>
               <el-input
                 v-model="draftAnswer"
                 type="textarea"
-                :rows="6"
-                placeholder="按真实面试口吻作答：先给结论，再讲项目背景、技术方案、结果和复盘。"
+                :rows="5"
+                placeholder="像真实面试一样直接开口回答。说完这一轮，AI 面试官会给出反馈并继续追问。"
                 maxlength="8000"
-                :disabled="['completed', 'cancelled', 'failed'].includes(current.status)"
+                :disabled="composerDisabled"
+                @keydown.ctrl.enter.prevent="sendAnswer"
+                @keydown.meta.enter.prevent="sendAnswer"
               />
               <div class="composer-foot">
                 <p class="muted hint">
                   <Save :size="12" /> 草稿已自动保存
                 </p>
-                <div class="qa-actions">
-                  <el-button :icon="ChevronLeft" :disabled="currentIndex === 0" @click="go(-1)">
-                    上一题
-                  </el-button>
-                  <el-button
-                    type="primary"
-                    :loading="submitting"
-                    :disabled="['completed', 'cancelled', 'failed'].includes(current.status)"
-                    @click="submitAnswer"
-                  >
-                    提交回答
-                  </el-button>
-                  <el-button
-                    :disabled="currentIndex === sortedQuestions.length - 1"
-                    @click="go(1)"
-                  >
-                    下一题 <ChevronRight :size="14" />
-                  </el-button>
-                </div>
+                <el-button
+                  type="primary"
+                  :loading="submitting || awaitingInterviewer"
+                  :disabled="composerDisabled"
+                  @click="sendAnswer"
+                >
+                  <SendHorizontal :size="15" />
+                  发送给面试官
+                </el-button>
               </div>
             </section>
           </section>
@@ -768,27 +891,12 @@ onUnmounted(() => {
 .stage-head .eyebrow { margin: 0 0 4px; color: #94a3b8; font-size: 11px; letter-spacing: 1.5px; display: flex; gap: 8px; align-items: center; }
 .stage-head h2 { margin: 0; color: #0f172a; font-size: 20px; display: flex; align-items: center; gap: 12px; }
 .head-actions { display: flex; gap: 10px; }
-.qa { border: 1px solid #e2e8f0; }
-.q-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
-.q-text { margin: 6px 0 14px; color: #0f172a; line-height: 1.6; font-size: 18px; }
+.q-meta { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 .rubric { margin: 0; padding-left: 20px; color: #475569; }
 .rubric li { line-height: 1.7; font-size: 13px; }
-.answer-block { margin-top: 14px; }
 .answer-head {
   display: flex; justify-content: space-between; align-items: center;
   font-size: 12px; color: #475569; margin-bottom: 6px;
-}
-.answered-banner {
-  margin-top: 10px; padding: 8px 12px; border-radius: 8px;
-  background: #ecfdf5; color: #065f46; font-size: 12px;
-  display: flex; align-items: center; gap: 6px;
-}
-.ai-feedback {
-  margin-top: 12px;
-  padding: 12px 14px;
-  border: 1px solid #bfdbfe;
-  border-radius: 8px;
-  background: #eff6ff;
 }
 .ai-feedback-head {
   display: flex;
@@ -798,7 +906,8 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 600;
 }
-.ai-feedback p {
+.feedback-bubble p,
+.final-bubble p {
   margin: 8px 0 0;
   color: #1f2937;
   line-height: 1.7;
@@ -858,7 +967,6 @@ onUnmounted(() => {
 .scoring-feedback-error {
   color: #b91c1c;
 }
-.qa-actions { display: flex; justify-content: space-between; gap: 8px; margin-top: 14px; }
 .error-card { background: #fef2f2; border: 1px solid #fecaca; }
 .error-card strong { color: #b91c1c; }
 .chat-room {
@@ -871,6 +979,24 @@ onUnmounted(() => {
   background:
     linear-gradient(180deg, rgba(255, 255, 255, 0.9), rgba(248, 251, 255, 0.92)),
     radial-gradient(circle at 12% 10%, rgba(64, 150, 255, 0.13), transparent 20rem);
+}
+.conversation-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #334155;
+  font-size: 13px;
+  font-weight: 700;
+}
+.conversation-thread {
+  max-height: min(62vh, 720px);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 4px;
+  scroll-behavior: smooth;
 }
 .message-row {
   display: flex;
@@ -908,6 +1034,23 @@ onUnmounted(() => {
   background: #fff;
   box-shadow: 0 12px 30px rgba(28, 43, 68, 0.08);
 }
+.message-kicker {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 700;
+}
+.interviewer-copy {
+  margin: 0;
+  color: #0f172a;
+  line-height: 1.75;
+  font-size: 16px;
+  white-space: pre-wrap;
+}
 .candidate-message .message-bubble {
   color: #fff;
   background: linear-gradient(135deg, #2f7df6, #2366d9);
@@ -943,6 +1086,10 @@ onUnmounted(() => {
 .feedback-bubble {
   background: #f6fbff;
 }
+.final-bubble {
+  background: #f0fdf4;
+  border-color: #bbf7d0;
+}
 .answer-composer {
   position: sticky;
   bottom: 12px;
@@ -965,8 +1112,10 @@ onUnmounted(() => {
   gap: 12px;
   margin-top: 10px;
 }
-.answer-composer .qa-actions {
-  margin-top: 0;
+.composer-foot :deep(.el-button span) {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
 }
 @media (max-width: 1024px) {
   .layout { grid-template-columns: 1fr; }
@@ -981,10 +1130,6 @@ onUnmounted(() => {
   }
   .message-bubble {
     max-width: calc(100% - 46px);
-  }
-  .answer-composer .qa-actions {
-    display: grid;
-    grid-template-columns: 1fr;
   }
 }
 </style>
