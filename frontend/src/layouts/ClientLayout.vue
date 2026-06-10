@@ -1,20 +1,35 @@
 <script setup>
-import { computed } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { RouterLink, RouterView, useRoute, useRouter } from 'vue-router'
 import {
+  AlertCircle,
   Briefcase,
   ClipboardList,
   FileText,
+  LifeBuoy,
   LogOut,
   MessageSquareText,
+  RefreshCw,
   ShieldCheck,
   Target,
+  Wifi,
+  WifiOff,
 } from 'lucide-vue-next'
 import { useSessionStore } from '@/stores/session'
 
 const route = useRoute()
 const router = useRouter()
 const session = useSessionStore()
+const supportVisible = ref(false)
+const checkingStatus = ref(false)
+const serviceStatus = ref({
+  online: typeof navigator === 'undefined' ? true : navigator.onLine,
+  api: 'checking',
+  ready: 'checking',
+  message: '正在检查服务状态',
+  checkedAt: '',
+})
+let statusTimer = null
 
 const menus = [
   { to: '/', label: '面试记录', icon: ClipboardList },
@@ -25,11 +40,75 @@ const menus = [
 ]
 
 const pageTitle = computed(() => route.meta.title || '面试记录')
-const showPageHead = computed(() => route.name !== 'dashboard')
+const showPageHead = computed(() => route.name !== 'dashboard' && !route.meta.immersive)
+const statusTone = computed(() => {
+  if (!serviceStatus.value.online || serviceStatus.value.api === 'down') return 'danger'
+  if (serviceStatus.value.ready === 'degraded') return 'warning'
+  if (serviceStatus.value.api === 'ok') return 'success'
+  return 'info'
+})
+const statusIcon = computed(() => {
+  if (!serviceStatus.value.online || serviceStatus.value.api === 'down') return WifiOff
+  if (serviceStatus.value.ready === 'degraded') return AlertCircle
+  return Wifi
+})
+const statusText = computed(() => {
+  if (!serviceStatus.value.online) return '当前网络离线'
+  if (serviceStatus.value.api === 'down') return '后端服务不可达'
+  if (serviceStatus.value.ready === 'degraded') return '服务可用，依赖检查异常'
+  if (serviceStatus.value.api === 'ok') return '服务运行正常'
+  return '正在检查服务'
+})
 
 function isActive(item) {
   if (item.to === '/') return route.path === '/'
   return route.path.startsWith(item.to)
+}
+
+async function checkSystemStatus() {
+  checkingStatus.value = true
+  const online = typeof navigator === 'undefined' ? true : navigator.onLine
+  serviceStatus.value.online = online
+  if (!online) {
+    serviceStatus.value = {
+      ...serviceStatus.value,
+      api: 'down',
+      ready: 'degraded',
+      message: '网络已断开，草稿仍会保存在本机',
+      checkedAt: new Date().toLocaleTimeString(),
+    }
+    checkingStatus.value = false
+    return
+  }
+
+  try {
+    const health = await fetch('/healthz', { cache: 'no-store' })
+    let ready = null
+    try {
+      ready = await fetch('/readyz', { cache: 'no-store' })
+    } catch {
+      ready = null
+    }
+    serviceStatus.value = {
+      online,
+      api: health.ok ? 'ok' : 'down',
+      ready: ready?.ok ? 'ok' : 'degraded',
+      message: health.ok
+        ? '核心 API 可访问，面试草稿会自动保存'
+        : '核心 API 暂时不可访问，请稍后重试',
+      checkedAt: new Date().toLocaleTimeString(),
+    }
+  } catch {
+    serviceStatus.value = {
+      online,
+      api: 'down',
+      ready: 'degraded',
+      message: '无法连接后端服务，请检查网络或稍后重试',
+      checkedAt: new Date().toLocaleTimeString(),
+    }
+  } finally {
+    checkingStatus.value = false
+  }
 }
 
 async function logout() {
@@ -41,10 +120,23 @@ async function logout() {
     })
     await session.logoutRemote()
     router.replace('/login')
-  } catch (_) {
+  } catch {
     // 用户取消退出
   }
 }
+
+onMounted(() => {
+  checkSystemStatus()
+  window.addEventListener('online', checkSystemStatus)
+  window.addEventListener('offline', checkSystemStatus)
+  statusTimer = window.setInterval(checkSystemStatus, 60000)
+})
+
+onUnmounted(() => {
+  window.removeEventListener('online', checkSystemStatus)
+  window.removeEventListener('offline', checkSystemStatus)
+  if (statusTimer) window.clearInterval(statusTimer)
+})
 </script>
 
 <template>
@@ -79,6 +171,19 @@ async function logout() {
           >
             管理端
           </el-button>
+          <el-button class="support-entry" plain :icon="LifeBuoy" @click="supportVisible = true">
+            帮助
+          </el-button>
+
+          <button
+            type="button"
+            class="quiet-status-pill"
+            :class="`status-${statusTone}`"
+            @click="supportVisible = true"
+          >
+            <component :is="statusIcon" :size="13" />
+            <span>{{ statusText }}</span>
+          </button>
 
           <el-dropdown>
             <button class="profile-chip" type="button">
@@ -117,6 +222,30 @@ async function logout() {
         </transition>
       </RouterView>
     </main>
+
+    <el-drawer v-model="supportVisible" title="帮助与支持" size="360px" class="support-drawer">
+      <div class="support-content">
+        <section>
+          <h3>服务状态</h3>
+          <p>{{ statusText }}。{{ serviceStatus.message }}</p>
+          <el-button text :icon="RefreshCw" :loading="checkingStatus" @click="checkSystemStatus">
+            重新检查
+          </el-button>
+        </section>
+        <section>
+          <h3>面试前检查</h3>
+          <ul>
+            <li>确认简历已经解析完成。</li>
+            <li>选择目标岗位后再开始 AI 面试。</li>
+            <li>回答会自动保存草稿，刷新页面后可继续。</li>
+          </ul>
+        </section>
+        <section>
+          <h3>遇到异常</h3>
+          <p>先刷新服务状态；如果 API 不可达，等待后端恢复后再继续。已提交的面试记录不会丢失。</p>
+        </section>
+      </div>
+    </el-drawer>
   </div>
 </template>
 
@@ -215,6 +344,43 @@ async function logout() {
   border-radius: 8px;
 }
 
+.support-entry {
+  border-radius: 8px;
+}
+
+.quiet-status-pill {
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 10px;
+  border: 1px solid #dbe5ef;
+  border-radius: 999px;
+  color: #5f6f89;
+  background: #fff;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.quiet-status-pill.status-success {
+  color: #0f766e;
+  border-color: #b7eadc;
+  background: #f0fdf8;
+}
+
+.quiet-status-pill.status-warning {
+  color: #b45309;
+  border-color: #fed7aa;
+  background: #fff7ed;
+}
+
+.quiet-status-pill.status-danger {
+  color: #be123c;
+  border-color: #fecdd3;
+  background: #fff1f2;
+}
+
 .profile-chip {
   height: 40px;
   display: inline-flex;
@@ -241,6 +407,30 @@ async function logout() {
   width: min(1180px, calc(100% - 32px));
   margin: 0 auto;
   padding: 28px 0 48px;
+}
+
+.support-content {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.support-content h3 {
+  margin: 0 0 8px;
+  color: #172033;
+  font-size: 15px;
+}
+
+.support-content p,
+.support-content li {
+  color: #5f6f89;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.support-content ul {
+  margin: 0;
+  padding-left: 18px;
 }
 
 .client-page-head {
@@ -302,7 +492,9 @@ async function logout() {
   }
 
   .profile-name,
-  .admin-entry {
+  .admin-entry,
+  .support-entry,
+  .quiet-status-pill span {
     display: none;
   }
 

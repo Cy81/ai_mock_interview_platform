@@ -23,6 +23,7 @@ from app.core.config import settings
 from app.core.exceptions import DomainError
 from app.models.job import JobDirection
 from app.models.resume import Resume
+from app.services.ai_config_service import get_effective_config
 from app.services.ai_provider import get_ai_provider
 from app.services.rag_service import RetrievalHit, search
 
@@ -108,7 +109,7 @@ def recommend_jobs(db: Session, resume: Resume, top_n: int = 3) -> list[dict[str
     if not jobs:
         raise DomainError("岗位池为空，请先在后台维护岗位方向", status_code=409)
 
-    use_llm = settings.AI_RUNTIME != "mock"
+    use_llm = _is_llm_enabled()
     recommendations: list[dict[str, Any]] = []
 
     if use_llm:
@@ -179,6 +180,15 @@ def _seniority_bonus(years: int, seniority: str | None) -> float:
     if lo <= years <= hi:
         return 1.0
     return max(0.0, 1.0 - abs(years - (lo + hi) / 2) / max(hi, 1))
+
+
+def _is_llm_enabled() -> bool:
+    try:
+        runtime = get_effective_config().runtime
+        value = runtime.value if hasattr(runtime, "value") else str(runtime)
+        return value != "mock"
+    except Exception:
+        return settings.AI_RUNTIME != "mock"
 
 
 # =====================================================================

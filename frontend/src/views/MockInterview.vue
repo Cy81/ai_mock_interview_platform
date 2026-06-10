@@ -11,6 +11,7 @@ import { useRoute, useRouter } from 'vue-router'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import {
   CheckCircle2,
+  Circle,
   Clock,
   Flag,
   MessageSquarePlus,
@@ -37,6 +38,7 @@ const creating = ref(false)
 const loading = ref(false)
 const sidebarLoading = ref(false)
 const chatRoomRef = ref(null)
+const autosaveState = ref('saved')
 const feedbackByQuestion = reactive({})
 const aiFeedback = reactive({
   loading: false,
@@ -101,6 +103,15 @@ const composerDisabled = computed(() =>
   !currentQuestion.value ||
   isCurrentAnswered.value,
 )
+const composerDisabledReason = computed(() => {
+  if (isReadonly.value) return '当前面试已结束，不能继续提交'
+  if (submitting.value) return '正在提交回答'
+  if (awaitingInterviewer.value) return 'AI 面试官正在思考，请稍等'
+  if (!currentQuestion.value) return '暂无当前问题'
+  if (isCurrentAnswered.value) return '当前问题已回答，等待下一题'
+  if (draftAnswer.value.trim().length < 5) return '回答至少 5 个字后可以发送'
+  return '可以发送'
+})
 const canFinish = computed(
   () =>
     !!current.value &&
@@ -155,6 +166,24 @@ const conversationTurns = computed(() => {
   })
   return turns
 })
+const responseQualityHints = computed(() => [
+  {
+    key: 'specific',
+    label: '说清场景',
+    done: draftAnswer.value.trim().length >= 20,
+  },
+  {
+    key: 'evidence',
+    label: '给出证据',
+    done: /(\d|%|用户|性能|时间|成本|结果|指标)/.test(draftAnswer.value),
+  },
+  {
+    key: 'tradeoff',
+    label: '说明取舍',
+    done: /(因为|所以|但是|取舍|权衡|风险|方案)/.test(draftAnswer.value),
+  },
+])
+const qualityChecklist = computed(() => responseQualityHints.value)
 const scoringStepIndex = computed(() => {
   const order = {
     scoring_started: 1,
@@ -206,6 +235,7 @@ function loadDraft() {
 }
 function saveDraft() {
   if (!current.value || !currentQuestion.value) return
+  autosaveState.value = 'saving'
   if (draftAnswer.value) {
     localStorage.setItem(
       draftKey(current.value.id, currentQuestion.value.id),
@@ -214,6 +244,9 @@ function saveDraft() {
   } else {
     localStorage.removeItem(draftKey(current.value.id, currentQuestion.value.id))
   }
+  window.setTimeout(() => {
+    autosaveState.value = 'saved'
+  }, 160)
 }
 watch(draftAnswer, () => saveDraft())
 
@@ -269,15 +302,6 @@ async function pickInterview(item) {
     ElMessage.error(err?.message || '加载面试失败')
   } finally {
     loading.value = false
-  }
-}
-
-async function refreshCurrent() {
-  if (!current.value) return
-  try {
-    current.value = await interviewApi.get(current.value.id)
-  } catch (err) {
-    ElMessage.error(err?.message || '刷新失败')
   }
 }
 
@@ -561,7 +585,7 @@ onMounted(async () => {
       resetScoringFeedback()
       startTimer()
       loadDraft()
-    } catch (err) {
+    } catch {
       ElMessage.error('面试不存在或已被删除')
     }
   }
@@ -753,6 +777,39 @@ onUnmounted(() => {
               </el-tag>
             </div>
 
+            <div class="interview-quality-panel">
+              <div class="question-rail" aria-label="答题导航">
+                <button
+                  v-for="(question, index) in sortedQuestions"
+                  :key="question.id"
+                  type="button"
+                  class="question-step"
+                  :class="{
+                    active: index === currentIndex,
+                    answered: answeredMap.has(question.id),
+                  }"
+                  @click="currentIndex = index; loadDraft(); scrollConversationToBottom()"
+                >
+                  <CheckCircle2 v-if="answeredMap.has(question.id)" :size="13" />
+                  <Circle v-else :size="13" />
+                  <span>第 {{ index + 1 }} 轮</span>
+                </button>
+              </div>
+
+              <div class="quality-card">
+                <strong>发送前检查</strong>
+                <div class="quality-list">
+                  <span
+                    v-for="item in qualityChecklist"
+                    :key="item.key"
+                    :class="{ done: item.done }"
+                  >
+                    {{ item.label }}
+                  </span>
+                </div>
+              </div>
+            </div>
+
             <div ref="chatRoomRef" class="conversation-thread">
               <article
                 v-for="turn in conversationTurns"
@@ -824,7 +881,7 @@ onUnmounted(() => {
             <section v-if="!canFinish" class="answer-composer">
               <div class="answer-head">
                 <span><Pencil :size="14" /> 回复 AI 面试官</span>
-                <span class="muted">{{ charCount }} / 8000</span>
+                <span class="muted">{{ charCount }} / 8000 · {{ autosaveState === 'saving' ? '保存中' : '已保存' }}</span>
               </div>
               <el-input
                 v-model="draftAnswer"
@@ -838,7 +895,7 @@ onUnmounted(() => {
               />
               <div class="composer-foot">
                 <p class="muted hint">
-                  <Save :size="12" /> 草稿已自动保存
+                  <Save :size="12" /> {{ composerDisabledReason }}
                 </p>
                 <el-button
                   type="primary"
@@ -989,6 +1046,94 @@ onUnmounted(() => {
   font-size: 13px;
   font-weight: 700;
 }
+
+.interview-quality-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 240px;
+  gap: 12px;
+  align-items: stretch;
+}
+
+.question-rail,
+.quality-card {
+  border: 1px solid #dce5f0;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.question-rail {
+  min-height: 58px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow-x: auto;
+  padding: 10px;
+}
+
+.question-step {
+  min-width: 84px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  border: 1px solid #d8e3ef;
+  border-radius: 8px;
+  color: #64748b;
+  background: #f8fbff;
+  font-size: 12px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.question-step.active {
+  color: #1d4ed8;
+  border-color: #93c5fd;
+  background: #eff6ff;
+}
+
+.question-step.answered {
+  color: #0f766e;
+  border-color: #99f6e4;
+  background: #ecfdf5;
+}
+
+.quality-card {
+  padding: 12px;
+}
+
+.quality-card strong {
+  display: block;
+  margin-bottom: 8px;
+  color: #172033;
+  font-size: 13px;
+}
+
+.quality-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.quality-list span {
+  min-height: 26px;
+  display: inline-flex;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid #d8e3ef;
+  border-radius: 999px;
+  color: #64748b;
+  background: #f8fbff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.quality-list span.done {
+  color: #0f766e;
+  border-color: #99f6e4;
+  background: #ecfdf5;
+}
+
 .conversation-thread {
   max-height: min(62vh, 720px);
   overflow-y: auto;
@@ -1123,6 +1268,7 @@ onUnmounted(() => {
 }
 @media (max-width: 640px) {
   .scoring-steps { grid-template-columns: 1fr; }
+  .interview-quality-panel { grid-template-columns: 1fr; }
   .stage-head,
   .composer-foot {
     align-items: stretch;

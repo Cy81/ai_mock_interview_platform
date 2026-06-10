@@ -8,10 +8,10 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Literal
+from typing import Annotated, Literal
 
 from pydantic import Field, field_validator, model_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 
 class Settings(BaseSettings):
@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     REFRESH_TOKEN_EXPIRE_DAYS: int = 14
 
     # ---------- CORS ----------
-    CORS_ORIGINS: list[str] = Field(
+    CORS_ORIGINS: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "http://localhost:5173",
             "http://127.0.0.1:5173",
@@ -95,7 +95,7 @@ class Settings(BaseSettings):
 
     # ---------- 文件上传 ----------
     MAX_RESUME_UPLOAD_MB: int = 10
-    ALLOWED_RESUME_MIMETYPES: list[str] = Field(
+    ALLOWED_RESUME_MIMETYPES: Annotated[list[str], NoDecode] = Field(
         default_factory=lambda: [
             "application/pdf",
             "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -142,6 +142,7 @@ class Settings(BaseSettings):
     @model_validator(mode="after")
     def validate_production(self) -> "Settings":
         if self.ENVIRONMENT == "production":
+            self._validate_production_hardening()
             if self.SECRET_KEY in {"change-me-in-production", ""}:
                 raise ValueError("生产环境 SECRET_KEY 不能使用默认值，请通过环境变量注入")
             if self.DATABASE_URL.startswith("sqlite"):
@@ -156,6 +157,28 @@ class Settings(BaseSettings):
         if not self.CELERY_RESULT_BACKEND:
             self.CELERY_RESULT_BACKEND = self.REDIS_URL
         return self
+
+    def _validate_production_hardening(self) -> None:
+        unsafe_secret_keys = {
+            "",
+            "change-me-in-production",
+            "please-rotate-this-in-production-32bytes-min",
+        }
+        if self.SECRET_KEY in unsafe_secret_keys or len(self.SECRET_KEY) < 32:
+            raise ValueError("production SECRET_KEY must be a rotated secret with at least 32 characters")
+
+        unsafe_admin_passwords = {"", "admin123", "password", "changeme", "change-me"}
+        if self.DEFAULT_ADMIN_PASSWORD in unsafe_admin_passwords or len(self.DEFAULT_ADMIN_PASSWORD) < 12:
+            raise ValueError("production DEFAULT_ADMIN_PASSWORD must be changed before deployment")
+
+        unsafe_origins = {"*", "http://localhost", "http://127.0.0.1"}
+        if any(origin in unsafe_origins or origin.startswith("http://localhost:") for origin in self.CORS_ORIGINS):
+            raise ValueError("production CORS_ORIGINS must use explicit public HTTPS origins")
+
+        if self.AI_RUNTIME == "deepseek" and not self.DEEPSEEK_API_KEY:
+            raise ValueError("production DEEPSEEK_API_KEY is required when AI_RUNTIME=deepseek")
+        if self.EMBEDDING_RUNTIME == "dashscope" and not self.DASHSCOPE_API_KEY:
+            raise ValueError("production DASHSCOPE_API_KEY is required when EMBEDDING_RUNTIME=dashscope")
 
     @property
     def is_sqlite(self) -> bool:

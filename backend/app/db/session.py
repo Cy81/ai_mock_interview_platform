@@ -9,7 +9,7 @@ from __future__ import annotations
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import make_url
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -73,3 +73,21 @@ def init_db() -> None:
     from app.models import ai_config, ai_usage, interview, job, rag, resume, user  # noqa: F401
 
     Base.metadata.create_all(bind=engine)
+    if settings.is_sqlite:
+        _ensure_sqlite_dev_columns()
+
+
+def _ensure_sqlite_dev_columns() -> None:
+    inspector = inspect(engine)
+    if "ai_model_configs" not in inspector.get_table_names():
+        return
+    column_names = {column["name"] for column in inspector.get_columns("ai_model_configs")}
+    if "wire_api" in column_names:
+        return
+    with engine.begin() as conn:
+        conn.execute(
+            text(
+                "ALTER TABLE ai_model_configs "
+                "ADD COLUMN wire_api VARCHAR(32) NOT NULL DEFAULT 'chat_completions'"
+            )
+        )

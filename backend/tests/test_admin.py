@@ -1,6 +1,9 @@
 """管理员后台 API 测试：用户管理 / 岗位 CRUD / RAG 写入。"""
 from __future__ import annotations
 
+import sys
+from types import SimpleNamespace
+
 from fastapi.testclient import TestClient
 
 
@@ -109,6 +112,7 @@ def test_admin_can_manage_ai_model_config(
             "base_url": "https://api.deepseek.com",
             "api_key": "sk-test-1234567890",
             "model": "deepseek-chat",
+            "wire_api": "responses",
             "temperature": 0.35,
             "max_tokens": 4096,
             "timeout": 45.0,
@@ -120,6 +124,7 @@ def test_admin_can_manage_ai_model_config(
     assert payload["name"] == "DeepSeek Production"
     assert payload["runtime"] == "deepseek"
     assert payload["provider"] == "deepseek"
+    assert payload["wire_api"] == "responses"
     assert payload["has_api_key"] is True
     assert payload["api_key_masked"] == "sk-t...7890"
     assert "api_key" not in payload
@@ -127,7 +132,41 @@ def test_admin_can_manage_ai_model_config(
     fetched = client.get("/api/v1/admin/ai/config", headers=admin_headers)
     assert fetched.status_code == 200
     assert fetched.json()["model"] == "deepseek-chat"
+    assert fetched.json()["wire_api"] == "responses"
     assert fetched.json()["temperature"] == 0.35
+
+
+def test_admin_ai_config_reads_lowercase_wire_api_from_database(
+    client: TestClient, admin_headers: dict[str, str]
+) -> None:
+    from sqlalchemy import text
+
+    from app.db.session import SessionLocal
+    from app.models.ai_config import AIModelConfig, AIWireAPI
+
+    with SessionLocal() as db:
+        db.execute(text("delete from ai_model_configs"))
+        db.execute(
+            text(
+                """
+                insert into ai_model_configs
+                    (name, runtime, provider, base_url, api_key, model, wire_api)
+                values
+                    ('Gateway', 'DEEPSEEK', 'DEEPSEEK', 'https://www.sailcode.store',
+                     'sk-test', 'grok-4.3-high', 'chat_completions')
+                """
+            )
+        )
+        db.commit()
+
+    with SessionLocal() as db:
+        config = db.query(AIModelConfig).one()
+        assert config.wire_api == AIWireAPI.CHAT_COMPLETIONS
+
+    response = client.get("/api/v1/admin/ai/config", headers=admin_headers)
+
+    assert response.status_code == 200, response.text
+    assert response.json()["wire_api"] == "chat_completions"
 
 
 def test_admin_can_test_mock_ai_model_config(
@@ -143,6 +182,7 @@ def test_admin_can_test_mock_ai_model_config(
             "base_url": "",
             "api_key": "",
             "model": "mock-interview",
+            "wire_api": "chat_completions",
             "temperature": 0.2,
             "max_tokens": 2048,
             "timeout": 10.0,
@@ -161,6 +201,46 @@ def test_admin_can_test_mock_ai_model_config(
     assert payload["latency_ms"] >= 0
 
 
+def test_admin_model_test_forwards_responses_wire_api_to_openai_gateway(
+    monkeypatch,
+) -> None:
+    from app.models.ai_config import AIProvider, AIRuntime
+    from app.services import ai_config_service
+
+    captured: dict = {}
+    client_kwargs: dict = {}
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            captured.update(kwargs)
+            return SimpleNamespace()
+
+    class FakeOpenAI:
+        def __init__(self, **kwargs):
+            client_kwargs.update(kwargs)
+            self.chat = SimpleNamespace(completions=FakeCompletions())
+
+    monkeypatch.setitem(sys.modules, "openai", SimpleNamespace(OpenAI=FakeOpenAI))
+
+    ai_config_service._test_openai_compatible(
+        SimpleNamespace(
+            runtime=AIRuntime.DEEPSEEK,
+            provider=AIProvider.DEEPSEEK,
+            base_url="https://www.sailcode.store",
+            api_key="sk-test",
+            model="grok-4.3-high",
+            wire_api="responses",
+            temperature=0.2,
+            max_tokens=2048,
+            timeout=60,
+            max_retries=3,
+        )
+    )
+
+    assert captured["extra_body"] == {"wire_api": "responses"}
+    assert client_kwargs["default_headers"]["User-Agent"] == "Mozilla/5.0"
+
+
 def test_admin_can_view_ai_usage_after_model_test(
     client: TestClient, admin_headers: dict[str, str]
 ) -> None:
@@ -174,6 +254,7 @@ def test_admin_can_view_ai_usage_after_model_test(
             "base_url": "",
             "api_key": "",
             "model": "mock-observable",
+            "wire_api": "chat_completions",
             "temperature": 0.2,
             "max_tokens": 2048,
             "timeout": 10.0,

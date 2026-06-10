@@ -4,7 +4,7 @@ from datetime import datetime
 
 from pydantic import BaseModel, Field, model_validator
 
-from app.models.ai_config import AIProvider, AIRuntime
+from app.models.ai_config import AIProvider, AIRuntime, AIWireAPI
 
 
 class AIModelConfigUpdate(BaseModel):
@@ -14,6 +14,7 @@ class AIModelConfigUpdate(BaseModel):
     base_url: str = Field(default="", max_length=512)
     api_key: str | None = Field(default=None, max_length=4096)
     model: str = Field(min_length=1, max_length=120)
+    wire_api: AIWireAPI = AIWireAPI.CHAT_COMPLETIONS
     temperature: float = Field(ge=0, le=2)
     max_tokens: int = Field(ge=1, le=128000)
     timeout: float = Field(ge=1, le=600)
@@ -37,6 +38,7 @@ class AIModelConfigRead(BaseModel):
     provider: AIProvider
     base_url: str
     model: str
+    wire_api: AIWireAPI
     temperature: float
     max_tokens: int
     timeout: float
@@ -56,6 +58,7 @@ class AIModelTestResult(BaseModel):
     runtime: AIRuntime
     provider: AIProvider
     model: str
+    wire_api: AIWireAPI
     latency_ms: float
     message: str
     error: str | None = None

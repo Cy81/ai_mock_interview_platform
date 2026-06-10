@@ -18,14 +18,21 @@ from typing import Any, Iterator
 
 import structlog
 from tenacity import (
-    RetryError,
-    retry,
+    Retrying,
     retry_if_exception_type,
     stop_after_attempt,
     wait_exponential,
 )
 
 from app.core.config import settings
+from app.models.ai_config import AIProvider as ModelAIProvider
+from app.models.ai_config import AIRuntime, AIWireAPI
+from app.services.ai_config_service import (
+    EffectiveAIConfig,
+    build_openai_default_headers,
+    build_openai_extra_body,
+    get_effective_config,
+)
 
 
 logger = structlog.get_logger("ai")
@@ -101,24 +108,30 @@ class AIProvider(ABC):
 class DeepSeekProvider(AIProvider):
     """基于 OpenAI Compatible SDK 的 DeepSeek 实现。"""
 
-    def __init__(self) -> None:
+    def __init__(self, config: EffectiveAIConfig | None = None) -> None:
         from openai import OpenAI
         import httpx
 
-        if not settings.DEEPSEEK_API_KEY:
+        self.config = config or _load_effective_config()
+        if not self.config.api_key:
             raise RuntimeError("DEEPSEEK_API_KEY 未配置")
         self.client = OpenAI(
-            api_key=settings.DEEPSEEK_API_KEY,
-            base_url=settings.DEEPSEEK_BASE_URL,
+            api_key=self.config.api_key,
+            base_url=self.config.base_url,
+            default_headers=build_openai_default_headers(),
             timeout=httpx.Timeout(
                 connect=10.0,
-                read=settings.AI_TIMEOUT,
+                read=self.config.timeout,
                 write=10.0,
                 pool=5.0,
             ),
             max_retries=0,  # 重试交给 tenacity，行为可控
         )
-        self.model = settings.DEEPSEEK_MODEL
+        self.model = self.config.model
+        self.temperature = self.config.temperature
+        self.max_tokens = self.config.max_tokens
+        self.max_retries = max(1, self.config.max_retries)
+        self.extra_body = build_openai_extra_body(self.config)
 
     # ---------- 基础调用 ----------
     def _invoke(
@@ -137,9 +150,11 @@ class DeepSeekProvider(AIProvider):
                 {"role": "system", "content": system},
                 {"role": "user", "content": user},
             ],
-            "temperature": settings.AI_TEMPERATURE if temperature is None else temperature,
-            "max_tokens": settings.AI_MAX_TOKENS if max_tokens is None else max_tokens,
+            "temperature": self.temperature if temperature is None else temperature,
+            "max_tokens": self.max_tokens if max_tokens is None else max_tokens,
         }
+        if self.extra_body:
+            kwargs["extra_body"] = self.extra_body
         if json_mode and not stream:
             kwargs["response_format"] = {"type": "json_object"}
         if stream:
@@ -147,12 +162,6 @@ class DeepSeekProvider(AIProvider):
             kwargs["stream_options"] = {"include_usage": True}
         return self.client.chat.completions.create(**kwargs)
 
-    @retry(
-        reraise=True,
-        retry=retry_if_exception_type(Exception),
-        stop=stop_after_attempt(settings.AI_MAX_RETRIES),
-        wait=wait_exponential(multiplier=1, min=1, max=8),
-    )
     def chat_json(
         self,
         system: str,
@@ -163,23 +172,26 @@ class DeepSeekProvider(AIProvider):
     ) -> tuple[Any, LLMResponse]:
         start = time.perf_counter()
         try:
-            response = self._invoke(
-                system, user,
-                json_mode=True,
-                temperature=temperature,
-                max_tokens=max_tokens,
-            )
+            for attempt in Retrying(
+                reraise=True,
+                retry=retry_if_exception_type(Exception),
+                stop=stop_after_attempt(self.max_retries),
+                wait=wait_exponential(multiplier=1, min=1, max=8),
+            ):
+                with attempt:
+                    response = self._invoke(
+                        system, user,
+                        json_mode=True,
+                        temperature=temperature,
+                        max_tokens=max_tokens,
+                    )
         except Exception:
             logger.exception("ai_call_failed", model=self.model)
             raise
         latency_ms = (time.perf_counter() - start) * 1000
-        content = response.choices[0].message.content or "{}"
+        content = _extract_response_content(response)
         parsed = _parse_json_safely(content)
-        usage = LLMUsage(
-            prompt_tokens=getattr(response.usage, "prompt_tokens", 0),
-            completion_tokens=getattr(response.usage, "completion_tokens", 0),
-            total_tokens=getattr(response.usage, "total_tokens", 0),
-        )
+        usage = _extract_response_usage(response)
         meta = LLMResponse(
             content=content,
             usage=usage,
@@ -197,6 +209,9 @@ class DeepSeekProvider(AIProvider):
 
     def chat_stream(self, system: str, user: str) -> Iterator[str]:
         response = self._invoke(system, user, json_mode=False, stream=True)
+        if isinstance(response, str):
+            yield response
+            return
         for chunk in response:
             if not chunk.choices:
                 continue
@@ -421,6 +436,114 @@ def _parse_json_safely(content: str) -> Any:
         return {}
 
 
+def _extract_response_content(response: Any) -> str:
+    if isinstance(response, str):
+        return response or "{}"
+    if isinstance(response, dict):
+        return _extract_content_from_mapping(response)
+
+    choices = getattr(response, "choices", None)
+    if choices:
+        first = choices[0]
+        message = getattr(first, "message", None)
+        content = getattr(message, "content", None)
+        if content is not None:
+            return _content_to_text(content)
+
+    output_text = getattr(response, "output_text", None)
+    if output_text is not None:
+        return _content_to_text(output_text)
+
+    if hasattr(response, "model_dump"):
+        try:
+            dumped = response.model_dump()
+            if isinstance(dumped, dict):
+                return _extract_content_from_mapping(dumped)
+        except Exception:
+            pass
+    return "{}"
+
+
+def _extract_content_from_mapping(payload: dict[str, Any]) -> str:
+    choices = payload.get("choices")
+    if isinstance(choices, list) and choices:
+        first = choices[0]
+        if isinstance(first, dict):
+            message = first.get("message") or {}
+            if isinstance(message, dict) and message.get("content") is not None:
+                return _content_to_text(message["content"])
+
+    if payload.get("output_text") is not None:
+        return _content_to_text(payload["output_text"])
+
+    output = payload.get("output")
+    if isinstance(output, list):
+        text_parts: list[str] = []
+        for item in output:
+            if not isinstance(item, dict):
+                continue
+            content = item.get("content")
+            if isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and part.get("text") is not None:
+                        text_parts.append(str(part["text"]))
+            elif content is not None:
+                text_parts.append(_content_to_text(content))
+        if text_parts:
+            return "".join(text_parts)
+
+    if payload.get("content") is not None:
+        return _content_to_text(payload["content"])
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _content_to_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content or "{}"
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, dict) and item.get("text") is not None:
+                parts.append(str(item["text"]))
+            elif item is not None:
+                parts.append(str(item))
+        return "".join(parts) or "{}"
+    return str(content) if content is not None else "{}"
+
+
+def _extract_response_usage(response: Any) -> LLMUsage:
+    usage = None
+    if isinstance(response, dict):
+        usage = response.get("usage")
+    elif not isinstance(response, str):
+        usage = getattr(response, "usage", None)
+
+    prompt_tokens = _usage_int(usage, "prompt_tokens", "input_tokens")
+    completion_tokens = _usage_int(usage, "completion_tokens", "output_tokens")
+    total_tokens = _usage_int(usage, "total_tokens")
+    if not total_tokens:
+        total_tokens = prompt_tokens + completion_tokens
+    return LLMUsage(
+        prompt_tokens=prompt_tokens,
+        completion_tokens=completion_tokens,
+        total_tokens=total_tokens,
+    )
+
+
+def _usage_int(usage: Any, *keys: str) -> int:
+    if not usage:
+        return 0
+    for key in keys:
+        value = usage.get(key) if isinstance(usage, dict) else getattr(usage, key, None)
+        if value is None:
+            continue
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            return 0
+    return 0
+
+
 def _extract_name(text: str) -> str:
     m = re.search(r"(?:姓名|Name)[:：]\s*([一-龥A-Za-z ]{2,20})", text)
     return m.group(1).strip() if m else "候选人"
@@ -465,21 +588,97 @@ def _learning_plan(qa_pairs, contexts) -> list[str]:
 
 
 _provider_singleton: AIProvider | None = None
+_provider_signature: tuple[object, ...] | None = None
 
 
 def get_ai_provider() -> AIProvider:
-    """工厂方法，根据 settings.AI_RUNTIME 选择实现。"""
-    global _provider_singleton
-    if _provider_singleton is not None:
+    """工厂方法，根据后台生效 AI 配置选择实现。"""
+    global _provider_singleton, _provider_signature
+    config = _load_effective_config()
+    signature = _config_signature(config)
+    if _provider_singleton is not None and _provider_signature == signature:
         return _provider_singleton
-    if settings.AI_RUNTIME == "deepseek":
-        _provider_singleton = DeepSeekProvider()
+    if _runtime_value(config) == AIRuntime.DEEPSEEK.value:
+        _provider_singleton = DeepSeekProvider(config)
     else:
         _provider_singleton = MockAIProvider()
+    _provider_signature = signature
     return _provider_singleton
 
 
 def reset_ai_provider() -> None:
     """测试用：重置单例。"""
-    global _provider_singleton
+    global _provider_singleton, _provider_signature
     _provider_singleton = None
+    _provider_signature = None
+
+
+def _load_effective_config() -> EffectiveAIConfig:
+    try:
+        return get_effective_config()
+    except Exception as exc:  # pragma: no cover - fallback for scripts before DB init
+        logger.warning("ai_config_load_failed_fallback_settings", error=str(exc)[:300])
+        return _fallback_effective_config()
+
+
+def _fallback_effective_config() -> EffectiveAIConfig:
+    if settings.AI_RUNTIME == AIRuntime.DEEPSEEK.value:
+        return EffectiveAIConfig(
+            id=None,
+            name="Environment DeepSeek",
+            runtime=AIRuntime.DEEPSEEK,
+            provider=ModelAIProvider.DEEPSEEK,
+            base_url=settings.DEEPSEEK_BASE_URL,
+            api_key=settings.DEEPSEEK_API_KEY or "",
+            model=settings.DEEPSEEK_MODEL,
+            wire_api=AIWireAPI.CHAT_COMPLETIONS,
+            temperature=settings.AI_TEMPERATURE,
+            max_tokens=settings.AI_MAX_TOKENS,
+            timeout=settings.AI_TIMEOUT,
+            max_retries=settings.AI_MAX_RETRIES,
+        )
+    return EffectiveAIConfig(
+        id=None,
+        name="Local Mock",
+        runtime=AIRuntime.MOCK,
+        provider=ModelAIProvider.MOCK,
+        base_url="",
+        api_key="",
+        model="mock-interview",
+        wire_api=AIWireAPI.CHAT_COMPLETIONS,
+        temperature=settings.AI_TEMPERATURE,
+        max_tokens=settings.AI_MAX_TOKENS,
+        timeout=settings.AI_TIMEOUT,
+        max_retries=settings.AI_MAX_RETRIES,
+    )
+
+
+def _config_signature(config: EffectiveAIConfig) -> tuple[object, ...]:
+    return (
+        config.id,
+        _runtime_value(config),
+        _provider_value(config),
+        config.base_url,
+        config.api_key,
+        config.model,
+        _wire_api_value(config),
+        config.temperature,
+        config.max_tokens,
+        config.timeout,
+        config.max_retries,
+    )
+
+
+def _runtime_value(config: EffectiveAIConfig) -> str:
+    runtime = getattr(config, "runtime", AIRuntime.MOCK)
+    return runtime.value if hasattr(runtime, "value") else str(runtime)
+
+
+def _provider_value(config: EffectiveAIConfig) -> str:
+    provider = getattr(config, "provider", ModelAIProvider.MOCK)
+    return provider.value if hasattr(provider, "value") else str(provider)
+
+
+def _wire_api_value(config: EffectiveAIConfig) -> str:
+    wire_api = getattr(config, "wire_api", AIWireAPI.CHAT_COMPLETIONS)
+    return wire_api.value if hasattr(wire_api, "value") else str(wire_api)

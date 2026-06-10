@@ -86,6 +86,278 @@ def test_full_business_flow(client: TestClient, auth_headers: dict[str, str]) ->
     assert report_resp.json()["status"] == "completed"
 
 
+def test_conversational_interview_turn_generates_next_question(
+    client: TestClient, auth_headers: dict[str, str]
+) -> None:
+    resume_response = client.post(
+        "/api/v1/resumes",
+        headers=auth_headers,
+        json={
+            "filename": "conversation-resume.txt",
+            "target_position": "AI 应用工程师",
+            "text": (
+                "姓名：李雷\n3年 Python FastAPI RAG LangChain SSE Docker 项目经验。"
+                "负责 AI 模拟面试平台：简历解析、RAG 题库召回、流式追问和评分报告。"
+            ),
+        },
+    )
+    assert resume_response.status_code == 201, resume_response.text
+    resume = resume_response.json()
+
+    recommend_response = client.post(
+        "/api/v1/jobs/recommend",
+        headers=auth_headers,
+        json={"resume_id": resume["id"], "top_n": 1},
+    )
+    assert recommend_response.status_code == 200, recommend_response.text
+    job = recommend_response.json()["recommendations"][0]
+
+    interview_response = client.post(
+        "/api/v1/interviews",
+        headers=auth_headers,
+        json={
+            "resume_id": resume["id"],
+            "job_code": job["code"],
+            "question_count": 4,
+            "conversational": True,
+            "idempotency_key": "conversation-turn-key",
+        },
+    )
+    assert interview_response.status_code == 201, interview_response.text
+    interview = interview_response.json()
+    assert interview["question_count"] == 4
+    assert len(interview["questions"]) == 1
+
+    first_question = interview["questions"][0]
+    turn_response = client.post(
+        f"/api/v1/interviews/{interview['id']}/turns",
+        headers=auth_headers,
+        json={
+            "question_id": first_question["id"],
+            "answer": (
+                "我会用 LangChain 编排面试 Agent，用 RAG 召回题库和简历证据，"
+                "再通过 SSE 把追问过程流式返回给前端。"
+            ),
+            "duration_ms": 25000,
+        },
+    )
+
+    assert turn_response.status_code == 200, turn_response.text
+    payload = turn_response.json()
+    assert payload["answered_question_id"] == first_question["id"]
+    assert payload["completed"] is False
+    assert payload["next_question"]["position"] == 2
+    assert "刚才" in payload["next_question"]["question"]
+    assert any(
+        token in payload["next_question"]["question"]
+        for token in ("RAG", "LangChain", "FastAPI")
+    )
+    assert len(payload["interview"]["questions"]) == 2
+
+
+def test_create_interview_falls_back_when_ai_generation_fails(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    import app.services.interview_service as interview_service
+
+    class FailingRuntime:
+        def generate_interview_questions(self, **kwargs):
+            raise RuntimeError("upstream model returned invalid payload")
+
+    monkeypatch.setattr(
+        interview_service,
+        "get_interview_agent_runtime",
+        lambda: FailingRuntime(),
+    )
+
+    resume_response = client.post(
+        "/api/v1/resumes",
+        headers=auth_headers,
+        json={
+            "filename": "fallback-resume.txt",
+            "target_position": "AI 应用工程师",
+            "text": "姓名：李雷\n3年 Python FastAPI RAG LangChain Docker 项目经验。",
+        },
+    )
+    assert resume_response.status_code == 201, resume_response.text
+    resume = resume_response.json()
+
+    recommend_response = client.post(
+        "/api/v1/jobs/recommend",
+        headers=auth_headers,
+        json={"resume_id": resume["id"], "top_n": 1},
+    )
+    assert recommend_response.status_code == 200, recommend_response.text
+    job = recommend_response.json()["recommendations"][0]
+
+    interview_response = client.post(
+        "/api/v1/interviews",
+        headers=auth_headers,
+        json={
+            "resume_id": resume["id"],
+            "job_code": job["code"],
+            "question_count": 2,
+            "idempotency_key": "fallback-question-generation",
+        },
+    )
+
+    assert interview_response.status_code == 201, interview_response.text
+    interview = interview_response.json()
+    assert interview["status"] == "in_progress"
+    assert len(interview["questions"]) == 2
+    assert all(question["rubric"] for question in interview["questions"])
+
+
+def test_interview_turn_falls_back_when_next_question_generation_fails(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    resume_response = client.post(
+        "/api/v1/resumes",
+        headers=auth_headers,
+        json={
+            "filename": "fallback-turn-resume.txt",
+            "target_position": "AI 应用工程师",
+            "text": "姓名：李雷\n3年 Python FastAPI RAG LangChain Docker 项目经验。",
+        },
+    )
+    assert resume_response.status_code == 201, resume_response.text
+    resume = resume_response.json()
+
+    recommend_response = client.post(
+        "/api/v1/jobs/recommend",
+        headers=auth_headers,
+        json={"resume_id": resume["id"], "top_n": 1},
+    )
+    assert recommend_response.status_code == 200, recommend_response.text
+    job = recommend_response.json()["recommendations"][0]
+
+    interview_response = client.post(
+        "/api/v1/interviews",
+        headers=auth_headers,
+        json={
+            "resume_id": resume["id"],
+            "job_code": job["code"],
+            "question_count": 3,
+            "conversational": True,
+            "idempotency_key": "fallback-next-question",
+        },
+    )
+    assert interview_response.status_code == 201, interview_response.text
+    interview = interview_response.json()
+    first_question = interview["questions"][0]
+
+    import app.services.interview_service as interview_service
+
+    class FailingRuntime:
+        def generate_next_question(self, **kwargs):
+            raise RuntimeError("next question failed")
+
+    monkeypatch.setattr(
+        interview_service,
+        "get_interview_agent_runtime",
+        lambda: FailingRuntime(),
+    )
+
+    turn_response = client.post(
+        f"/api/v1/interviews/{interview['id']}/turns",
+        headers=auth_headers,
+        json={
+            "question_id": first_question["id"],
+            "answer": "我会结合 RAG 召回、LangChain 编排和 SSE 流式输出设计完整链路。",
+            "duration_ms": 20000,
+        },
+    )
+
+    assert turn_response.status_code == 200, turn_response.text
+    payload = turn_response.json()
+    assert payload["completed"] is False
+    assert payload["next_question"]["position"] == 2
+    assert "刚才" in payload["next_question"]["question"]
+
+
+def test_finish_interview_falls_back_when_ai_scoring_fails(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    resume_response = client.post(
+        "/api/v1/resumes",
+        headers=auth_headers,
+        json={
+            "filename": "fallback-score-resume.txt",
+            "target_position": "AI 应用工程师",
+            "text": "姓名：李雷\n3年 Python FastAPI RAG LangChain Docker 项目经验。",
+        },
+    )
+    assert resume_response.status_code == 201, resume_response.text
+    resume = resume_response.json()
+
+    recommend_response = client.post(
+        "/api/v1/jobs/recommend",
+        headers=auth_headers,
+        json={"resume_id": resume["id"], "top_n": 1},
+    )
+    assert recommend_response.status_code == 200, recommend_response.text
+    job = recommend_response.json()["recommendations"][0]
+
+    interview_response = client.post(
+        "/api/v1/interviews",
+        headers=auth_headers,
+        json={
+            "resume_id": resume["id"],
+            "job_code": job["code"],
+            "question_count": 2,
+            "idempotency_key": "fallback-scoring",
+        },
+    )
+    assert interview_response.status_code == 201, interview_response.text
+    interview = interview_response.json()
+
+    for question in interview["questions"]:
+        answer_response = client.post(
+            f"/api/v1/interviews/{interview['id']}/answers",
+            headers=auth_headers,
+            json={
+                "question_id": question["id"],
+                "answer": (
+                    "我会先拆解业务目标，再用 FastAPI 设计接口，用 LangChain 编排模型调用，"
+                    "结合 RAG 召回简历证据，并用监控指标验证效果。"
+                ),
+                "duration_ms": 30000,
+            },
+        )
+        assert answer_response.status_code == 200, answer_response.text
+
+    import app.services.interview_service as interview_service
+
+    class FailingRuntime:
+        def score_interview(self, **kwargs):
+            raise RuntimeError("scoring failed")
+
+    monkeypatch.setattr(
+        interview_service,
+        "get_interview_agent_runtime",
+        lambda: FailingRuntime(),
+    )
+
+    finish_response = client.post(
+        f"/api/v1/interviews/{interview['id']}/finish",
+        headers=auth_headers,
+    )
+
+    assert finish_response.status_code == 200, finish_response.text
+    finished = finish_response.json()
+    assert finished["status"] == "completed"
+    assert finished["overall_score"] > 0
+    assert finished["score_report"]["source"] == "local-fallback"
+    assert len(finished["score_report"]["question_scores"]) == len(interview["questions"])
+    assert all(answer["score"] is not None for answer in finished["answers"])
+
+
 def test_rag_search(client: TestClient, auth_headers: dict[str, str]) -> None:
     response = client.post(
         "/api/v1/rag/search",

@@ -10,7 +10,6 @@ import { useRouter } from 'vue-router'
 import { ElMessage } from 'element-plus'
 import {
   BookOpen,
-  BrainCircuit,
   RefreshCw,
   Sparkles,
   Target,
@@ -96,20 +95,19 @@ onMounted(load)
 </script>
 
 <template>
-  <div class="job-page">
-    <el-card shadow="never">
-      <template #header>
-        <div class="card-head">
-          <h3><BrainCircuit :size="16" /> 岗位匹配 Agent</h3>
-          <el-button text :icon="RefreshCw" :loading="loading" @click="load">刷新简历池</el-button>
-        </div>
-      </template>
+  <div class="job-page job-match-studio">
+    <section class="match-command-panel">
+      <div class="match-copy">
+        <p class="section-kicker">JOB MATCH AGENT</p>
+        <h1>找到最值得模拟的岗位</h1>
+        <p>选择一份已解析简历，Agent 会根据技能、项目经历和岗位能力模型推荐方向，并给出差距和学习路径。</p>
+      </div>
 
       <el-alert v-if="error" type="error" :title="error" show-icon :closable="false" />
 
-      <el-form :inline="true" label-position="top" class="form-inline">
+      <el-form label-position="top" class="match-form">
         <el-form-item label="选择简历">
-          <el-select v-model="form.resume_id" style="width: 320px" placeholder="选择已解析的简历">
+          <el-select v-model="form.resume_id" class="full-control" placeholder="选择已解析的简历">
             <el-option
               v-for="r in resumes"
               :key="r.id"
@@ -121,16 +119,15 @@ onMounted(load)
         <el-form-item label="推荐数量">
           <el-input-number v-model="form.top_n" :min="1" :max="10" />
         </el-form-item>
-        <el-form-item label=" ">
-          <el-button
-            type="primary"
-            :loading="submitting"
-            :disabled="!form.resume_id"
-            @click="recommend"
-          >
-            <Sparkles :size="14" /><span style="margin-left: 6px">生成推荐</span>
-          </el-button>
-        </el-form-item>
+        <el-button
+          type="primary"
+          size="large"
+          :loading="submitting"
+          :disabled="!form.resume_id"
+          @click="recommend"
+        >
+          <Sparkles :size="14" /><span>生成岗位推荐</span>
+        </el-button>
       </el-form>
 
       <div v-if="selectedResume" class="resume-tip">
@@ -142,25 +139,30 @@ onMounted(load)
         v-if="!loading && !resumes.length"
         description="暂无已解析的简历，先去上传一份"
       >
-        <el-button type="primary" @click="router.push('/resumes')">去上传简历</el-button>
+          <el-button type="primary" @click="router.push('/resumes')">去上传简历</el-button>
       </el-empty>
-    </el-card>
+      <el-button text :icon="RefreshCw" :loading="loading" @click="load">刷新简历池</el-button>
+    </section>
 
-    <el-card v-if="submitting" shadow="never" class="mt">
+    <section v-if="submitting" class="recommendation-board loading-board">
       <el-skeleton :rows="6" animated />
-    </el-card>
+    </section>
 
-    <div v-else-if="result" class="mt">
-      <el-row :gutter="16">
-        <el-col
+    <section v-else-if="result" class="recommendation-board">
+      <div class="board-head">
+        <div>
+          <p class="section-kicker">RECOMMENDATIONS</p>
+          <h2>推荐岗位</h2>
+        </div>
+        <span>{{ result.recommendations?.length || 0 }} 个方向</span>
+      </div>
+
+      <div class="job-card-grid">
+        <article
           v-for="rec in result.recommendations"
           :key="rec.code"
-          :xs="24"
-          :md="12"
-          :lg="8"
-          class="rec-col"
+          class="job-match-card"
         >
-          <el-card shadow="hover" class="rec-card">
             <div class="rec-head">
               <div>
                 <h4>{{ rec.title }}</h4>
@@ -229,44 +231,145 @@ onMounted(load)
             <el-button type="primary" plain class="cta-btn" @click="startInterview(rec)">
               用此岗位发起模拟面试
             </el-button>
-          </el-card>
-        </el-col>
-      </el-row>
-    </div>
+        </article>
+      </div>
+    </section>
 
-    <el-card v-else-if="!loading" shadow="never" class="mt">
+    <section v-else-if="!loading" class="recommendation-board empty-board">
       <el-empty description='选择简历后点击"生成推荐"，Agent 会基于双 RAG 给出 Top N 岗位' />
-    </el-card>
+    </section>
   </div>
 </template>
 
 <style scoped>
 .job-page { display: flex; flex-direction: column; gap: 16px; }
-.mt { margin-top: 4px; }
-.card-head { display: flex; justify-content: space-between; align-items: center; }
-.card-head h3 { margin: 0; font-size: 15px; color: #0f172a; display: flex; align-items: center; gap: 6px; }
-.form-inline { margin-top: 6px; }
-.resume-tip { margin-top: 4px; font-size: 13px; color: #475569; }
+.match-command-panel,
+.recommendation-board {
+  border: 1px solid #dde6f1;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.93);
+  box-shadow: 0 16px 38px rgba(28, 43, 68, 0.07);
+}
+.match-command-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 360px;
+  gap: 22px;
+  align-items: end;
+  padding: 26px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(255, 248, 235, 0.9)),
+    radial-gradient(circle at 8% 10%, rgba(245, 158, 11, 0.16), transparent 18rem);
+}
+.section-kicker {
+  margin: 0 0 8px;
+  color: #6b7b91;
+  font-size: 12px;
+  font-weight: 800;
+}
+.match-copy h1 {
+  margin: 0;
+  color: #172033;
+  font-size: 34px;
+  line-height: 1.18;
+}
+.match-copy p:not(.section-kicker) {
+  max-width: 680px;
+  margin: 12px 0 0;
+  color: #5f6f89;
+  line-height: 1.8;
+}
+.match-form {
+  padding: 18px;
+  border: 1px solid #e1e8f2;
+  border-radius: 8px;
+  background: #fff;
+}
+.match-form .el-button {
+  width: 100%;
+  margin-top: 4px;
+}
+.match-form .el-button span {
+  margin-left: 6px;
+}
+.full-control {
+  width: 100%;
+}
+.resume-tip { margin-top: 12px; font-size: 13px; color: #475569; }
 .muted { color: #94a3b8; }
-.rec-col { margin-bottom: 16px; }
-.rec-card { height: 100%; }
+.recommendation-board {
+  padding: 22px;
+}
+.loading-board,
+.empty-board {
+  min-height: 240px;
+}
+.board-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.board-head h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 24px;
+}
+.board-head span {
+  color: #6b7b91;
+  font-size: 13px;
+  font-weight: 800;
+}
+.job-card-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+}
+.job-match-card {
+  min-height: 100%;
+  display: flex;
+  flex-direction: column;
+  padding: 18px;
+  border: 1px solid #e1e8f2;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 10px 24px rgba(28, 43, 68, 0.05);
+}
 .rec-head { display: flex; justify-content: space-between; align-items: flex-start; }
 .rec-head h4 { margin: 0; color: #0f172a; font-size: 16px; }
 .match-score { display: flex; align-items: center; gap: 12px; margin: 12px 0 4px; }
 .match-score :deep(.el-progress) { flex: 1; }
 .match-score strong { font-size: 18px; color: #0f172a; min-width: 56px; text-align: right; }
-.rec-card section { margin-top: 14px; }
-.rec-card h5 {
+.job-match-card section { margin-top: 14px; }
+.job-match-card h5 {
   margin: 0 0 6px; color: #475569; font-size: 12px;
   display: flex; align-items: center; gap: 6px; letter-spacing: .5px;
 }
-.rec-card ul, .rec-card ol { margin: 0; padding-left: 20px; color: #1e293b; }
-.rec-card li { font-size: 13px; line-height: 1.7; }
+.job-match-card ul, .job-match-card ol { margin: 0; padding-left: 20px; color: #1e293b; }
+.job-match-card li { font-size: 13px; line-height: 1.7; }
 .gap-tags { display: flex; flex-wrap: wrap; gap: 6px; }
 .kb-ref { padding: 8px 0; border-bottom: 1px dashed #e2e8f0; }
 .kb-ref:last-child { border-bottom: 0; }
 .kb-ref strong { color: #0f172a; font-size: 13px; }
 .kb-ref small { margin-left: 8px; }
 .kb-ref p { margin: 4px 0 0; color: #475569; font-size: 12px; line-height: 1.6; }
-.cta-btn { margin-top: 16px; width: 100%; }
+.cta-btn { margin-top: auto; width: 100%; }
+
+@media (max-width: 1080px) {
+  .match-command-panel,
+  .job-card-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .match-command-panel,
+  .recommendation-board {
+    padding: 16px;
+  }
+
+  .match-copy h1 {
+    font-size: 28px;
+  }
+}
 </style>

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from app.core.config import settings
-from app.models.ai_config import AIModelConfig, AIProvider, AIRuntime
+from app.models.ai_config import AIModelConfig, AIProvider, AIRuntime, AIWireAPI
 from app.models.ai_usage import AIUsageStatus
 from app.schemas.ai_config import AIModelConfigRead, AIModelConfigUpdate, AIModelTestResult
 from app.services import ai_usage_service
@@ -27,6 +27,7 @@ class EffectiveAIConfig:
     base_url: str
     api_key: str
     model: str
+    wire_api: AIWireAPI
     temperature: float
     max_tokens: int
     timeout: float
@@ -52,6 +53,7 @@ def upsert_config(db: Session, payload: AIModelConfigUpdate) -> AIModelConfigRea
             base_url=payload.base_url.strip(),
             api_key=(payload.api_key or "").strip(),
             model=payload.model.strip(),
+            wire_api=payload.wire_api,
             temperature=payload.temperature,
             max_tokens=payload.max_tokens,
             timeout=payload.timeout,
@@ -67,6 +69,7 @@ def upsert_config(db: Session, payload: AIModelConfigUpdate) -> AIModelConfigRea
         if payload.api_key is not None:
             config.api_key = payload.api_key.strip()
         config.model = payload.model.strip()
+        config.wire_api = payload.wire_api
         config.temperature = payload.temperature
         config.max_tokens = payload.max_tokens
         config.timeout = payload.timeout
@@ -117,6 +120,7 @@ def test_active_config(db: Session) -> AIModelTestResult:
         runtime=config.runtime,
         provider=config.provider,
         model=config.model,
+        wire_api=config.wire_api,
         latency_ms=latency_ms,
         message="model configuration is reachable" if ok else "model configuration test failed",
         error=error,
@@ -143,6 +147,7 @@ def to_read(config: EffectiveAIConfig) -> AIModelConfigRead:
         provider=config.provider,
         base_url=config.base_url,
         model=config.model,
+        wire_api=config.wire_api,
         temperature=config.temperature,
         max_tokens=config.max_tokens,
         timeout=config.timeout,
@@ -183,6 +188,7 @@ def _from_row(row: AIModelConfig) -> EffectiveAIConfig:
         base_url=row.base_url,
         api_key=row.api_key,
         model=row.model,
+        wire_api=row.wire_api,
         temperature=row.temperature,
         max_tokens=row.max_tokens,
         timeout=row.timeout,
@@ -205,6 +211,7 @@ def _from_settings() -> EffectiveAIConfig:
             base_url=settings.DEEPSEEK_BASE_URL,
             api_key=settings.DEEPSEEK_API_KEY or "",
             model=settings.DEEPSEEK_MODEL,
+            wire_api=AIWireAPI.CHAT_COMPLETIONS,
             temperature=settings.AI_TEMPERATURE,
             max_tokens=settings.AI_MAX_TOKENS,
             timeout=settings.AI_TIMEOUT,
@@ -218,6 +225,7 @@ def _from_settings() -> EffectiveAIConfig:
         base_url="",
         api_key="",
         model="mock-interview",
+        wire_api=AIWireAPI.CHAT_COMPLETIONS,
         temperature=settings.AI_TEMPERATURE,
         max_tokens=settings.AI_MAX_TOKENS,
         timeout=settings.AI_TIMEOUT,
@@ -247,6 +255,7 @@ def _test_openai_compatible(config: EffectiveAIConfig) -> None:
     client = OpenAI(
         api_key=config.api_key,
         base_url=config.base_url,
+        default_headers=build_openai_default_headers(),
         timeout=httpx.Timeout(
             connect=10.0,
             read=config.timeout,
@@ -255,12 +264,27 @@ def _test_openai_compatible(config: EffectiveAIConfig) -> None:
         ),
         max_retries=0,
     )
-    client.chat.completions.create(
-        model=config.model,
-        messages=[
+    kwargs = {
+        "model": config.model,
+        "messages": [
             {"role": "system", "content": "You are a health check endpoint."},
             {"role": "user", "content": "Reply with ok."},
         ],
-        temperature=0,
-        max_tokens=8,
-    )
+        "temperature": 0,
+        "max_tokens": 8,
+    }
+    extra_body = build_openai_extra_body(config)
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    client.chat.completions.create(**kwargs)
+
+
+def build_openai_extra_body(config: EffectiveAIConfig) -> dict[str, str]:
+    wire_api = AIWireAPI(getattr(config, "wire_api", AIWireAPI.CHAT_COMPLETIONS))
+    if wire_api == AIWireAPI.RESPONSES:
+        return {"wire_api": AIWireAPI.RESPONSES.value}
+    return {}
+
+
+def build_openai_default_headers() -> dict[str, str]:
+    return {"User-Agent": "Mozilla/5.0"}

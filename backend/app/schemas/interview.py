@@ -14,6 +14,7 @@ class InterviewCreate(BaseModel):
     job_code: str = Field(min_length=1, max_length=80)
     question_count: int = Field(default=6, ge=1, le=12)
     idempotency_key: str | None = Field(default=None, max_length=64)
+    conversational: bool = False
 
 
 class AnswerSubmit(BaseModel):
@@ -68,6 +69,13 @@ class InterviewRead(InterviewBrief):
     answers: list[InterviewAnswerRead] = Field(default_factory=list)
     score_report: dict[str, Any] | None = None
     status_reason: str | None = None
+
+
+class InterviewTurnRead(BaseModel):
+    interview: InterviewRead
+    answered_question_id: int
+    next_question: InterviewQuestionRead | None = None
+    completed: bool = False
 
 
 class ReportRead(BaseModel):

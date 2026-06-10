@@ -131,20 +131,39 @@ async function remove(row) {
   }
 }
 
+function scrollToUpload() {
+  document.querySelector('.upload-dropzone-panel')?.scrollIntoView({
+    behavior: 'smooth',
+    block: 'start',
+  })
+}
+
 onMounted(() => load(1))
 </script>
 
 <template>
   <div class="resume-page">
-    <el-row :gutter="16">
-      <el-col :xs="24" :md="12">
-        <el-card shadow="never">
-          <template #header>
-            <div class="card-head">
-              <h3><UploadIcon :size="16" /> 上传简历文件</h3>
-              <span class="muted">PDF / DOCX / TXT / MD · ≤10MB</span>
-            </div>
-          </template>
+    <section class="resume-command-center">
+      <div class="resume-hero-copy">
+        <p class="section-kicker">RESUME WORKSPACE</p>
+        <h1>先让 AI 读懂你的简历</h1>
+        <p>上传 PDF 或粘贴文本后，系统会持久化简历、解析技能与项目经历，并用于后续岗位匹配和面试追问。</p>
+      </div>
+
+      <div class="resume-timeline">
+        <span class="active">上传</span>
+        <span :class="{ active: list.length }">解析</span>
+        <span :class="{ active: list.some((item) => item.parse_status === 'parsed') }">匹配岗位</span>
+        <span>开始面试</span>
+      </div>
+    </section>
+
+    <section class="resume-workspace-grid">
+      <article class="upload-dropzone-panel">
+        <div class="card-head">
+          <h3><UploadIcon :size="16" /> 上传简历文件</h3>
+          <span class="muted">PDF / DOCX / TXT / MD · ≤10MB</span>
+        </div>
           <el-form label-position="top">
             <el-form-item label="目标岗位（可选）">
               <el-input
@@ -173,17 +192,13 @@ onMounted(() => load(1))
               style="margin-top: 12px"
             />
           </el-form>
-        </el-card>
-      </el-col>
+      </article>
 
-      <el-col :xs="24" :md="12">
-        <el-card shadow="never">
-          <template #header>
-            <div class="card-head">
-              <h3><FileText :size="16" /> 粘贴文本简历</h3>
-              <span class="muted">{{ text.text.trim().length }} / 200000 字</span>
-            </div>
-          </template>
+      <article class="paste-resume-panel">
+        <div class="card-head">
+          <h3><FileText :size="16" /> 粘贴文本简历</h3>
+          <span class="muted">{{ text.text.trim().length }} / 200000 字</span>
+        </div>
           <el-form label-position="top">
             <el-row :gutter="12">
               <el-col :span="12">
@@ -215,56 +230,48 @@ onMounted(() => load(1))
               保存并解析
             </el-button>
           </el-form>
-        </el-card>
-      </el-col>
-    </el-row>
+      </article>
+    </section>
 
-    <el-card shadow="never" class="mt">
-      <template #header>
-        <div class="card-head">
+    <section class="resume-library">
+      <div class="card-head">
+        <div>
+          <p class="section-kicker">RESUME LIBRARY</p>
           <h3>简历档案</h3>
-          <el-button text :icon="RefreshCw" :loading="loading" @click="load(page)">刷新</el-button>
         </div>
-      </template>
+        <el-button text :icon="RefreshCw" :loading="loading" @click="load(page)">刷新</el-button>
+      </div>
 
-      <el-table v-loading="loading" :data="list" stripe @row-click="openDetail">
-        <el-table-column prop="id" label="ID" width="70" />
-        <el-table-column prop="filename" label="文件名" min-width="200" show-overflow-tooltip />
-        <el-table-column prop="target_position" label="目标岗位" width="160" show-overflow-tooltip>
-          <template #default="{ row }">{{ row.target_position || '—' }}</template>
-        </el-table-column>
-        <el-table-column label="解析状态" width="120">
-          <template #default="{ row }">
-            <el-tag
-              :type="statusMeta[row.parse_status]?.type || 'info'"
-              size="small"
-            >
+      <div v-loading="loading" class="parsed-resume-grid">
+        <article
+          v-for="row in list"
+          :key="row.id"
+          class="resume-file-card"
+          @click="openDetail(row)"
+        >
+          <div class="file-card-head">
+            <FileText :size="18" />
+            <el-tag :type="statusMeta[row.parse_status]?.type || 'info'" size="small">
               {{ statusMeta[row.parse_status]?.label || row.parse_status }}
             </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="180">
-          <template #default="{ row }">
-            {{ new Date(row.created_at).toLocaleString() }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button
-              type="danger"
-              size="small"
-              text
-              :icon="Trash2"
-              @click.stop="remove(row)"
-            >
+          </div>
+          <strong>#{{ row.id }} {{ row.filename }}</strong>
+          <p>{{ row.target_position || '未填写目标岗位' }}</p>
+          <small>{{ new Date(row.created_at).toLocaleString() }}</small>
+          <div class="file-card-actions">
+            <el-button type="primary" plain size="small" @click.stop="openDetail(row)">
+              查看解析
+            </el-button>
+            <el-button type="danger" text size="small" :icon="Trash2" @click.stop="remove(row)">
               删除
             </el-button>
-          </template>
-        </el-table-column>
-        <template #empty>
-          <el-empty description="尚未上传简历" />
-        </template>
-      </el-table>
+          </div>
+        </article>
+
+        <el-empty v-if="!list.length && !loading" description="尚未上传简历">
+          <el-button type="primary" @click="scrollToUpload">上传第一份简历</el-button>
+        </el-empty>
+      </div>
 
       <div class="pager">
         <el-pagination
@@ -278,7 +285,7 @@ onMounted(() => load(1))
           @size-change="() => load(1)"
         />
       </div>
-    </el-card>
+    </section>
 
     <el-drawer
       v-model="drawerVisible"
@@ -334,13 +341,131 @@ onMounted(() => load(1))
 
 <style scoped>
 .resume-page { display: flex; flex-direction: column; gap: 16px; }
-.mt { margin-top: 12px; }
-.card-head { display: flex; justify-content: space-between; align-items: center; }
+.resume-command-center,
+.upload-dropzone-panel,
+.paste-resume-panel,
+.resume-library {
+  border: 1px solid #dde6f1;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 16px 38px rgba(28, 43, 68, 0.07);
+}
+.resume-command-center {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 360px);
+  gap: 18px;
+  align-items: center;
+  padding: 26px;
+  background:
+    linear-gradient(135deg, rgba(255, 255, 255, 0.96), rgba(239, 247, 255, 0.9)),
+    radial-gradient(circle at 88% 20%, rgba(20, 184, 166, 0.18), transparent 16rem);
+}
+.section-kicker {
+  margin: 0 0 8px;
+  color: #6b7b91;
+  font-size: 12px;
+  font-weight: 800;
+}
+.resume-hero-copy h1 {
+  margin: 0;
+  color: #172033;
+  font-size: 34px;
+  line-height: 1.18;
+}
+.resume-hero-copy p:not(.section-kicker) {
+  max-width: 680px;
+  margin: 12px 0 0;
+  color: #5f6f89;
+  line-height: 1.8;
+}
+.resume-timeline {
+  display: grid;
+  gap: 9px;
+}
+.resume-timeline span {
+  min-height: 38px;
+  display: flex;
+  align-items: center;
+  padding: 0 12px;
+  border: 1px solid #d9e4f1;
+  border-radius: 8px;
+  color: #6b7b91;
+  background: #fff;
+  font-size: 13px;
+  font-weight: 800;
+}
+.resume-timeline span.active {
+  color: #0f766e;
+  border-color: #99f6e4;
+  background: #ecfdf5;
+}
+.resume-workspace-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 0.92fr) minmax(0, 1.08fr);
+  gap: 16px;
+}
+.upload-dropzone-panel,
+.paste-resume-panel,
+.resume-library {
+  padding: 20px;
+}
+.card-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
 .card-head h3 { margin: 0; font-size: 15px; color: #0f172a; display: flex; align-items: center; gap: 6px; }
 .muted { color: #94a3b8; font-size: 12px; }
 .up-icon { color: #94a3b8; }
 .up-text { color: #1e293b; font-size: 14px; margin-top: 8px; }
 .up-tip { color: #94a3b8; font-size: 12px; margin-top: 4px; }
+.resume-library {
+  margin-top: 4px;
+}
+.parsed-resume-grid {
+  min-height: 180px;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-top: 16px;
+}
+.resume-file-card {
+  min-height: 178px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 15px;
+  border: 1px solid #e1e8f2;
+  border-radius: 8px;
+  background: #f8fbff;
+  cursor: pointer;
+  transition:
+    transform 0.16s ease,
+    border-color 0.16s ease,
+    box-shadow 0.16s ease;
+}
+.resume-file-card:hover {
+  transform: translateY(-2px);
+  border-color: #bad4ff;
+  box-shadow: 0 12px 24px rgba(28, 43, 68, 0.09);
+}
+.file-card-head,
+.file-card-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+.resume-file-card strong {
+  color: #172033;
+  line-height: 1.45;
+}
+.resume-file-card p {
+  margin: 0;
+  color: #5f6f89;
+  font-size: 13px;
+}
+.resume-file-card small {
+  margin-top: auto;
+  color: #8a97aa;
+  font-size: 12px;
+}
 .pager { display: flex; justify-content: flex-end; margin-top: 14px; }
 .detail h4 { margin: 18px 0 8px; color: #0f172a; font-size: 14px; }
 .detail .tags { display: flex; flex-wrap: wrap; gap: 6px; }
@@ -350,5 +475,25 @@ onMounted(() => load(1))
   max-height: 280px; overflow: auto;
 }
 .error-text { color: #dc2626; font-size: 12px; margin-left: 8px; }
-:deep(.el-table__row) { cursor: pointer; }
+
+@media (max-width: 980px) {
+  .resume-command-center,
+  .resume-workspace-grid,
+  .parsed-resume-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 640px) {
+  .resume-command-center,
+  .upload-dropzone-panel,
+  .paste-resume-panel,
+  .resume-library {
+    padding: 16px;
+  }
+
+  .resume-hero-copy h1 {
+    font-size: 28px;
+  }
+}
 </style>

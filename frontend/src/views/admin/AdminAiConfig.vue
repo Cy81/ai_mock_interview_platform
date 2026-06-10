@@ -18,6 +18,7 @@ const form = reactive({
   base_url: '',
   api_key: '',
   model: 'mock-interview',
+  wire_api: 'chat_completions',
   temperature: 0.2,
   max_tokens: 2048,
   timeout: 60,
@@ -44,6 +45,7 @@ watch(
     if (runtime === 'mock') {
       form.provider = 'mock'
       form.base_url = ''
+      form.wire_api = 'chat_completions'
       if (!form.model || form.model === 'deepseek-chat') form.model = 'mock-interview'
     } else {
       form.provider = 'deepseek'
@@ -61,6 +63,7 @@ function assignForm(payload) {
   form.base_url = payload.base_url || ''
   form.api_key = ''
   form.model = payload.model || 'mock-interview'
+  form.wire_api = payload.wire_api || 'chat_completions'
   form.temperature = payload.temperature ?? 0.2
   form.max_tokens = payload.max_tokens ?? 2048
   form.timeout = payload.timeout ?? 60
@@ -87,6 +90,7 @@ function buildPayload() {
     base_url: form.base_url.trim(),
     api_key: apiKeyDirty.value ? form.api_key.trim() : null,
     model: form.model.trim(),
+    wire_api: form.wire_api,
     temperature: Number(form.temperature),
     max_tokens: Number(form.max_tokens),
     timeout: Number(form.timeout),
@@ -190,6 +194,21 @@ onMounted(load)
             />
           </el-form-item>
 
+          <el-form-item label="请求协议">
+            <el-segmented
+              v-model="form.wire_api"
+              class="wire-api-switch"
+              :disabled="form.runtime === 'mock'"
+              :options="[
+                { label: 'Chat Completions', value: 'chat_completions' },
+                { label: 'Responses 兼容', value: 'responses' },
+              ]"
+            />
+            <p class="field-hint">
+              OpenAI-compatible 网关通常选择 Chat Completions；如果网关要求 wire_api=&quot;responses&quot;，请选择 Responses 兼容。
+            </p>
+          </el-form-item>
+
           <el-form-item label="API Key">
             <div class="secret-field">
               <el-input
@@ -259,6 +278,10 @@ onMounted(load)
             <dd>{{ current?.model || '-' }}</dd>
           </div>
           <div>
+            <dt>请求协议</dt>
+            <dd>{{ current?.wire_api || '-' }}</dd>
+          </div>
+          <div>
             <dt>密钥状态</dt>
             <dd>{{ current?.has_api_key ? current.api_key_masked : '未配置' }}</dd>
           </div>
@@ -289,7 +312,7 @@ onMounted(load)
         </el-button>
 
         <p class="test-note">
-          Mock 模式会本地通过；DeepSeek 模式会向配置的 OpenAI Compatible 地址发起一次短请求。
+          Mock 模式会本地通过；OpenAI Compatible 模式会按所选请求协议向配置地址发起一次短请求。
         </p>
       </aside>
     </section>
@@ -345,6 +368,23 @@ onMounted(load)
   color: #64748b;
   margin: 6px 0 0;
   line-height: 1.6;
+}
+
+.field-hint {
+  width: 100%;
+  margin: 8px 0 0;
+  color: #64748b;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.wire-api-switch {
+  width: min(420px, 100%);
+}
+
+.wire-api-switch :deep(.el-segmented__item-label) {
+  white-space: normal;
+  line-height: 1.2;
 }
 
 .config-grid {

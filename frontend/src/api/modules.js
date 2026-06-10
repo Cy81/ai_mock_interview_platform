@@ -72,6 +72,7 @@ export const interviewApi = {
   get: (id) => api.get(`/interviews/${id}`),
   create: (payload) => api.post('/interviews', payload),
   answer: (id, payload) => api.post(`/interviews/${id}/answers`, payload),
+  turn: (id, payload) => api.post(`/interviews/${id}/turns`, payload),
   finish: (id) => api.post(`/interviews/${id}/finish`),
   cancel: (id) => api.post(`/interviews/${id}/cancel`),
   delete: (id) => api.delete(`/interviews/${id}`),

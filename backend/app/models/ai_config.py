@@ -18,6 +18,11 @@ class AIProvider(str, enum.Enum):
     DEEPSEEK = "deepseek"
 
 
+class AIWireAPI(str, enum.Enum):
+    CHAT_COMPLETIONS = "chat_completions"
+    RESPONSES = "responses"
+
+
 class AIModelConfig(TimestampMixin, Base):
     __tablename__ = "ai_model_configs"
 
@@ -36,6 +41,17 @@ class AIModelConfig(TimestampMixin, Base):
     base_url: Mapped[str] = mapped_column(String(512), default="", server_default="", nullable=False)
     api_key: Mapped[str] = mapped_column(Text, default="", server_default="", nullable=False)
     model: Mapped[str] = mapped_column(String(120), nullable=False)
+    wire_api: Mapped[AIWireAPI] = mapped_column(
+        Enum(
+            AIWireAPI,
+            native_enum=False,
+            length=32,
+            values_callable=lambda enum_cls: [item.value for item in enum_cls],
+        ),
+        default=AIWireAPI.CHAT_COMPLETIONS,
+        server_default=AIWireAPI.CHAT_COMPLETIONS.value,
+        nullable=False,
+    )
     temperature: Mapped[float] = mapped_column(Float, default=0.2, server_default="0.2", nullable=False)
     max_tokens: Mapped[int] = mapped_column(Integer, default=2048, server_default="2048", nullable=False)
     timeout: Mapped[float] = mapped_column(Float, default=60.0, server_default="60", nullable=False)

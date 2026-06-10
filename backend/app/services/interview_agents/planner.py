@@ -5,8 +5,7 @@ from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from app.core.config import settings
-from app.services.interview_agents.llm import invoke_structured
+from app.services.interview_agents.llm import invoke_structured, is_chat_model_enabled
 from app.services.interview_agents.models import InterviewPlan
 
 
@@ -20,7 +19,7 @@ class InterviewPlannerAgent:
         contexts: list[dict[str, Any]],
         count: int,
     ) -> InterviewPlan:
-        if settings.AI_RUNTIME != "deepseek":
+        if not is_chat_model_enabled():
             return self._mock_plan(job_competency=job_competency, profile=profile, count=count)
 
         prompt = ChatPromptTemplate.from_messages(

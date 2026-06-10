@@ -7,13 +7,12 @@ from typing import Any
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.prompts import ChatPromptTemplate
 
-from app.core.config import settings
-from app.services.interview_agents.llm import get_chat_model
+from app.services.interview_agents.llm import get_chat_model, is_chat_model_enabled
 
 
 class FollowupAgent:
     def stream(self, **kwargs: Any) -> Iterator[str]:
-        if settings.AI_RUNTIME == "deepseek":
+        if is_chat_model_enabled():
             yield from self._stream_with_langchain(**kwargs)
             return
 

@@ -38,8 +38,7 @@ services:
       redis:
         condition: service_healthy
     command: >
-      sh -c "alembic upgrade head &&
-             python scripts/seed_data.py &&
+      sh -c "scripts/prestart.sh &&
              gunicorn app.main:app
                --worker-class uvicorn.workers.UvicornWorker
                --workers 2

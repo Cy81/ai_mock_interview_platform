@@ -65,6 +65,31 @@ class InterviewAgentRuntime:
             knowledge_contexts=knowledge_contexts,
         )
 
+    def generate_next_question(
+        self,
+        *,
+        job_title: str,
+        job_competency: dict[str, Any],
+        profile: dict[str, Any],
+        contexts: list[dict[str, Any]],
+        conversation: list[dict[str, Any]],
+        current_question: dict[str, Any],
+        current_answer: str,
+        next_position: int,
+        max_questions: int,
+    ) -> tuple[dict[str, Any], LLMResponse]:
+        return self.question_generator.generate_next(
+            job_title=job_title,
+            job_competency=job_competency,
+            profile=profile,
+            contexts=contexts,
+            conversation=conversation,
+            current_question=current_question,
+            current_answer=current_answer,
+            next_position=next_position,
+            max_questions=max_questions,
+        )
+
     def score_interview(
         self,
         *,

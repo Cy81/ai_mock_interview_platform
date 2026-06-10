@@ -41,14 +41,14 @@ const clientRoutes = [
       {
         path: 'interviews',
         name: 'interviews',
-        component: () => import('@/views/MockInterview.vue'),
-        meta: { title: '模拟面试' },
+        component: () => import('@/views/AIInterviewRoom.vue'),
+        meta: { title: 'AI 面试房间', immersive: true },
       },
       {
         path: 'interviews/:id',
         name: 'interview-detail',
-        component: () => import('@/views/MockInterview.vue'),
-        meta: { title: '模拟面试' },
+        component: () => import('@/views/AIInterviewRoom.vue'),
+        meta: { title: 'AI 面试房间', immersive: true },
         props: true,
       },
       {

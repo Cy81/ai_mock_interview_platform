@@ -28,7 +28,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         except Exception as exc:
             duration_ms = (time.perf_counter() - start) * 1000
             logger.exception("request_failed", duration_ms=round(duration_ms, 2))
-            raise exc
+            raise
 
         duration_ms = (time.perf_counter() - start) * 1000
         response.headers["X-Request-ID"] = request_id

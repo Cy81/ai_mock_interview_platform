@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 import structlog
@@ -13,6 +14,7 @@ from app.api.deps import limiter
 from app.api.v1.router import client_router, admin_router
 from app.core.config import settings
 from app.core.exceptions import register_exception_handlers
+from app.core.health import get_readiness
 from app.core.logging import configure_logging, get_logger
 from app.core.middleware import RequestContextMiddleware
 from app.db.session import SessionLocal, init_db
@@ -94,14 +96,14 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     @app.get("/readyz", tags=["健康检查"])
-    def readyz() -> dict[str, str]:
-        # 真实环境可以加 DB / Redis ping
-        return {
-            "status": "ready",
-            "ai_runtime": settings.AI_RUNTIME,
-            "embedding_runtime": settings.EMBEDDING_RUNTIME,
-            "version": settings.APP_VERSION,
-        }
+    def readyz() -> JSONResponse:
+        payload = get_readiness()
+        status_code = (
+            status.HTTP_200_OK
+            if payload["status"] == "ready"
+            else status.HTTP_503_SERVICE_UNAVAILABLE
+        )
+        return JSONResponse(status_code=status_code, content=payload)
 
     return app
 

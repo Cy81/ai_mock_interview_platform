@@ -5,9 +5,8 @@ from typing import Any
 
 from langchain_core.prompts import ChatPromptTemplate
 
-from app.core.config import settings
 from app.services.ai_provider import LLMResponse
-from app.services.interview_agents.llm import invoke_structured
+from app.services.interview_agents.llm import invoke_structured, is_chat_model_enabled
 from app.services.interview_agents.models import ScoreResult
 
 
@@ -20,7 +19,7 @@ class ScoringAgent:
         question_answers: list[dict[str, Any]],
         knowledge_contexts: list[dict[str, Any]],
     ) -> tuple[ScoreResult, LLMResponse]:
-        if settings.AI_RUNTIME == "deepseek":
+        if is_chat_model_enabled():
             return self._score_with_langchain(
                 job_title=job_title,
                 profile=profile,

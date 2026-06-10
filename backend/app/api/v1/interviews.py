@@ -18,7 +18,9 @@ from app.schemas.interview import (
     AnswerSubmit,
     InterviewBrief,
     InterviewCreate,
+    InterviewQuestionRead,
     InterviewRead,
+    InterviewTurnRead,
 )
 from app.services import interview_service
 from app.services.ai_provider import get_ai_provider
@@ -48,6 +50,7 @@ def create_interview(
         job_code=payload.job_code,
         question_count=payload.question_count,
         idempotency_key=payload.idempotency_key,
+        conversational=payload.conversational,
     )
     return InterviewRead.model_validate(interview)
 
@@ -96,6 +99,37 @@ def submit_answer(
     )
     interview = interview_service.get_interview(db, user, interview_id)
     return InterviewRead.model_validate(interview)
+
+
+@router.post(
+    "/{interview_id}/turns",
+    response_model=InterviewTurnRead,
+    summary="提交一轮回答并生成下一轮对话式问题",
+)
+def submit_turn(
+    interview_id: int,
+    payload: AnswerSubmit,
+    user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    interview, next_question, completed = interview_service.submit_interview_turn(
+        db,
+        user,
+        interview_id,
+        question_id=payload.question_id,
+        answer=payload.answer,
+        duration_ms=payload.duration_ms,
+    )
+    return InterviewTurnRead(
+        interview=InterviewRead.model_validate(interview),
+        answered_question_id=payload.question_id,
+        next_question=(
+            InterviewQuestionRead.model_validate(next_question)
+            if next_question
+            else None
+        ),
+        completed=completed,
+    )
 
 
 @router.post(

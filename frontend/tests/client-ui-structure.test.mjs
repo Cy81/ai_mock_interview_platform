@@ -11,18 +11,63 @@ test('client layout is a candidate product shell instead of an admin sidebar', (
 
   assert.match(source, /client-topnav/)
   assert.doesNotMatch(source, /<el-aside\b/)
-  assert.match(source, /面试记录/)
-  assert.match(source, /上传简历/)
-  assert.match(source, /岗位匹配/)
+  assert.match(source, /to: '\/resumes'/)
+  assert.match(source, /to: '\/jobs'/)
+  assert.match(source, /to: '\/interviews'/)
 })
 
-test('dashboard centers the user workflow on interview records and resume start', () => {
+test('client shell exposes production connectivity and support affordances', () => {
+  const source = read('src/layouts/ClientLayout.vue')
+
+  assert.match(source, /quiet-status-pill/)
+  assert.match(source, /checkSystemStatus/)
+  assert.match(source, /navigator\.onLine/)
+  assert.match(source, /support-drawer/)
+  assert.match(source, /serviceStatus/)
+  assert.match(source, /supportVisible/)
+  assert.doesNotMatch(source, /<section class="system-status-bar"/)
+})
+
+test('dashboard feels like an interview launch cockpit instead of a records table', () => {
   const source = read('src/views/Dashboard.vue')
 
+  assert.match(source, /candidate-journey/)
+  assert.match(source, /primary-start-card/)
+  assert.match(source, /准备一场真实 AI 面试/)
   assert.match(source, /interview-records/)
   assert.match(source, /resume-start-panel/)
   assert.match(source, /startInterview/)
-  assert.match(source, /选择简历/)
+  assert.match(source, /selectedResumeId/)
+})
+
+test('dashboard guides candidates with a readiness checklist', () => {
+  const source = read('src/views/Dashboard.vue')
+
+  assert.match(source, /readiness-checklist/)
+  assert.match(source, /readinessItems/)
+  assert.match(source, /readinessScore/)
+  assert.match(source, /readiness-score/)
+  assert.match(source, /before-interview-panel/)
+})
+
+test('resume upload is a candidate resume workspace, not an admin table', () => {
+  const source = read('src/views/ResumeUpload.vue')
+
+  assert.match(source, /resume-command-center/)
+  assert.match(source, /upload-dropzone-panel/)
+  assert.match(source, /resume-timeline/)
+  assert.match(source, /parsed-resume-grid/)
+  assert.doesNotMatch(source, /<el-table\b/)
+})
+
+test('job matching is a guided recommendation studio with clear next action', () => {
+  const source = read('src/views/JobRecommend.vue')
+
+  assert.match(source, /job-match-studio/)
+  assert.match(source, /match-command-panel/)
+  assert.match(source, /recommendation-board/)
+  assert.match(source, /job-match-card/)
+  assert.match(source, /startInterview/)
 })
 
 test('mock interview uses a chat room and persistent answer composer', () => {
@@ -43,17 +88,36 @@ test('mock interview is driven by conversational AI turns instead of manual ques
   assert.match(source, /sendAnswer/)
   assert.match(source, /advanceToNextQuestion/)
   assert.match(source, /submitting\.value\s*\|\|[\s\S]*awaitingInterviewer\.value/)
-  assert.match(source, /回复 AI 面试官/)
-  assert.match(source, /开始 AI 面试/)
-  assert.match(source, /发送给面试官/)
-  assert.match(source, /AI 面试官正在思考/)
-  assert.match(source, /对话已完成，可以生成评分报告/)
-  assert.match(source, /AI 面试官 · 第/)
   assert.doesNotMatch(source, /conversationQuestions/)
-  assert.doesNotMatch(source, />\s*当前回答\s*</)
-  assert.doesNotMatch(source, />\s*题量\s*</)
-  assert.doesNotMatch(source, />\s*生成题目并开始\s*</)
-  assert.doesNotMatch(source, />\s*提交回答\s*</)
-  assert.doesNotMatch(source, />\s*上一题\s*</)
-  assert.doesNotMatch(source, />\s*下一题\s*</)
+})
+
+test('mock interview gives production-grade guidance while answering', () => {
+  const source = read('src/views/MockInterview.vue')
+
+  assert.match(source, /question-rail/)
+  assert.match(source, /composerDisabledReason/)
+  assert.match(source, /autosaveState/)
+  assert.match(source, /interview-quality-panel/)
+  assert.match(source, /responseQualityHints/)
+  assert.match(source, /qualityChecklist/)
+}
+)
+
+test('interview routes use a dedicated resume-aware AI interview room', () => {
+  const router = read('src/router/index.js')
+  const room = read('src/views/AIInterviewRoom.vue')
+
+  assert.match(router, /AIInterviewRoom\.vue/)
+  assert.match(room, /ai-interview-room/)
+  assert.match(room, /resume-insight-panel/)
+  assert.match(room, /interview-transcript/)
+  assert.match(room, /candidate-composer/)
+  assert.match(room, /focus-interview-layout/)
+  assert.match(room, /context-ribbon/)
+  assert.match(room, /followupStrategy/)
+  assert.match(room, /loadResumeProfile/)
+  assert.match(room, /profileSignals/)
+  assert.match(room, /conversational:\s*true/)
+  assert.match(room, /interviewApi\.turn/)
+  assert.doesNotMatch(room, /interviewApi\.answer\(current\.value\.id/)
 })

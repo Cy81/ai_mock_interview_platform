@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -52,6 +53,42 @@ def test_mock_runtime_generates_questions_with_langchain_facade() -> None:
     assert questions[0]["rubric"]
 
 
+def test_mock_runtime_generates_resume_aware_next_question_from_answer() -> None:
+    runtime = get_interview_agent_runtime()
+
+    question, meta = runtime.generate_next_question(
+        job_title="AI 应用工程师",
+        job_competency={"skills": ["FastAPI", "RAG", "LangChain"]},
+        profile={
+            "skills": ["FastAPI", "RAG", "LangChain"],
+            "projects": ["AI 模拟面试平台：简历解析、RAG 题库召回、SSE 流式追问。"],
+        },
+        contexts=[{"id": 101, "title": "RAG 追问", "content": "关注召回质量和回答证据。"}],
+        conversation=[
+            {
+                "position": 1,
+                "skill": "RAG",
+                "question": "请说明你如何设计 RAG 召回。",
+                "answer": "我会用向量召回题库，结合岗位和简历技能筛选问题，并通过 SSE 流式展示追问。",
+            }
+        ],
+        current_question={
+            "position": 1,
+            "skill": "RAG",
+            "question": "请说明你如何设计 RAG 召回。",
+        },
+        current_answer="我会用向量召回题库，结合岗位和简历技能筛选问题，并通过 SSE 流式展示追问。",
+        next_position=2,
+        max_questions=4,
+    )
+
+    assert meta.model == "langchain-mock"
+    assert question["position"] == 2
+    assert question["skill"] in {"RAG", "LangChain", "FastAPI"}
+    assert "刚才" in question["question"]
+    assert "RAG" in question["question"] or "LangChain" in question["question"]
+
+
 def test_deepseek_chat_model_requires_deepseek_api_key(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -72,6 +109,39 @@ def test_deepseek_chat_model_requires_deepseek_api_key(
 
     with pytest.raises(RuntimeError, match="DEEPSEEK_API_KEY is not configured"):
         agent_llm.get_chat_model()
+
+
+def test_langchain_chat_model_forwards_responses_wire_api(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    captured: dict = {}
+
+    class FakeChatOpenAI:
+        def __init__(self, **kwargs):
+            captured.update(kwargs)
+
+    monkeypatch.setitem(sys.modules, "langchain_openai", SimpleNamespace(ChatOpenAI=FakeChatOpenAI))
+    monkeypatch.setattr(
+        agent_llm,
+        "get_effective_config",
+        lambda: SimpleNamespace(
+            runtime=AIRuntime.DEEPSEEK,
+            provider=AIProvider.DEEPSEEK,
+            base_url="https://www.sailcode.store",
+            api_key="sk-test",
+            model="grok-4.3-high",
+            wire_api="responses",
+            temperature=0.2,
+            timeout=60,
+            max_tokens=2048,
+            max_retries=3,
+        ),
+    )
+
+    agent_llm.get_chat_model()
+
+    assert captured["extra_body"] == {"wire_api": "responses"}
+    assert captured["default_headers"]["User-Agent"] == "Mozilla/5.0"
 
 
 def test_langchain_structured_invocation_records_ai_usage(
@@ -118,10 +188,174 @@ def test_langchain_structured_invocation_records_ai_usage(
     assert records[0]["latency_ms"] >= 0
 
 
+def test_langchain_structured_invocation_falls_back_to_provider_on_parse_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    records: list[dict] = []
+    monkeypatch.setattr(
+        agent_llm,
+        "get_effective_config",
+        lambda: SimpleNamespace(
+            runtime=AIRuntime.DEEPSEEK,
+            provider=AIProvider.DEEPSEEK,
+            base_url="https://www.sailcode.store",
+            api_key="sk-test",
+            model="grok-4.3-high",
+            wire_api="responses",
+            temperature=0.2,
+            timeout=60,
+            max_tokens=2048,
+            max_retries=2,
+        ),
+    )
+    monkeypatch.setattr(
+        agent_llm,
+        "get_chat_model",
+        lambda: FakeListChatModel(responses=["这不是 JSON"]),
+    )
+
+    class FakeProvider:
+        def __init__(self, config):
+            self.config = config
+
+        def chat_json(self, system, user, *, temperature=None, max_tokens=None):
+            assert "format_instructions" not in user
+            return {"answer": "fallback-ok"}, LLMResponse(
+                content='{"answer":"fallback-ok"}',
+                model=self.config.model,
+            )
+
+    monkeypatch.setattr(agent_llm, "DeepSeekProvider", FakeProvider, raising=False)
+    monkeypatch.setattr(
+        agent_llm.ai_usage_service,
+        "record_ai_usage_safely",
+        lambda **kwargs: records.append(kwargs),
+    )
+    prompt = ChatPromptTemplate.from_messages(
+        [("system", "只返回 JSON。"), ("human", "{question}\n{format_instructions}")]
+    )
+
+    parsed, meta = agent_llm.invoke_structured(
+        prompt,
+        ProbeResult,
+        {"question": "ping"},
+    )
+
+    assert parsed.answer == "fallback-ok"
+    assert meta.model == "grok-4.3-high"
+    assert records[-1]["status"] == AIUsageStatus.OK
+
+
+def test_question_generation_uses_active_ai_config_when_env_runtime_is_mock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(question_generator, "is_chat_model_enabled", lambda: True, raising=False)
+    plan = InterviewPlan(
+        target_type="formal",
+        difficulty="intermediate",
+        core_skills=["FastAPI"],
+    )
+
+    def fake_invoke_structured(*args, **kwargs):
+        _prompt, output_model, variables = args
+        assert output_model is QuestionGenerationResult
+        assert variables["job_title"] == "AI 应用工程师"
+        return (
+            QuestionGenerationResult(
+                plan=plan,
+                questions=[
+                    GeneratedQuestion(
+                        position=1,
+                        type="technical",
+                        difficulty="intermediate",
+                        skill="FastAPI",
+                        question="请说明 FastAPI 依赖注入的生产实践。",
+                        rubric=["解释原理", "结合项目"],
+                    )
+                ],
+            ),
+            LLMResponse(content="[admin-configured]", model="admin-model"),
+        )
+
+    monkeypatch.setattr(question_generator, "invoke_structured", fake_invoke_structured)
+
+    questions, meta = QuestionGenerationAgent().generate(
+        plan=plan,
+        job_title="AI 应用工程师",
+        job_competency={"skills": ["FastAPI"]},
+        profile={"years": 2, "skills": ["FastAPI"]},
+        contexts=[],
+        count=1,
+    )
+
+    assert meta.model == "admin-model"
+    assert questions[0]["question"] == "请说明 FastAPI 依赖注入的生产实践。"
+
+
+def test_followup_stream_uses_active_ai_config_when_env_runtime_is_mock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(followup_module, "is_chat_model_enabled", lambda: True, raising=False)
+    monkeypatch.setattr(
+        followup_module,
+        "get_chat_model",
+        lambda: FakeListChatModel(responses=["请补充上线指标。"]),
+        raising=False,
+    )
+
+    chunks = list(
+        FollowupAgent().stream(
+            interview_id=1,
+            question_id=2,
+            answer="我会设计接口并补充测试。",
+            job_title="AI 应用工程师",
+            profile={"skills": ["FastAPI"]},
+            question={"question": "如何设计接口？", "rubric": ["结构", "测试"]},
+            knowledge_contexts=[],
+        )
+    )
+
+    assert "".join(chunks) == "请补充上线指标。"
+
+
+def test_scoring_uses_active_ai_config_when_env_runtime_is_mock(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(scoring_module, "is_chat_model_enabled", lambda: True, raising=False)
+
+    def fake_invoke_structured(*args, **kwargs):
+        _prompt, output_model, _variables = args
+        assert output_model is ScoreResult
+        return (
+            ScoreResult(
+                overall_score=91.0,
+                level="匹配",
+                dimension_scores={"技术准确性": 91.0},
+                question_scores=[{"position": 1, "score": 91.0, "comment": "证据充分"}],
+                strengths=["回答有项目证据"],
+                improvements=["继续量化指标"],
+                learning_plan=["复盘线上压测数据"],
+            ),
+            LLMResponse(content="[admin-score]", model="admin-model"),
+        )
+
+    monkeypatch.setattr(scoring_module, "invoke_structured", fake_invoke_structured, raising=False)
+
+    score, meta = ScoringAgent().score(
+        job_title="AI 应用工程师",
+        profile={"skills": ["FastAPI"]},
+        question_answers=[{"position": 1, "answer": "有测试和监控。"}],
+        knowledge_contexts=[],
+    )
+
+    assert meta.model == "admin-model"
+    assert score.overall_score == 91.0
+
+
 def test_deepseek_question_generation_limits_result_to_requested_count(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(question_generator.settings, "AI_RUNTIME", "deepseek")
+    monkeypatch.setattr(question_generator, "is_chat_model_enabled", lambda: True, raising=False)
     plan = InterviewPlan(
         target_type="intern",
         difficulty="basic",
@@ -167,12 +401,7 @@ def test_deepseek_question_generation_limits_result_to_requested_count(
 def test_deepseek_followup_stream_uses_langchain_chat_model(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        followup_module,
-        "settings",
-        SimpleNamespace(AI_RUNTIME="deepseek"),
-        raising=False,
-    )
+    monkeypatch.setattr(followup_module, "is_chat_model_enabled", lambda: True, raising=False)
     monkeypatch.setattr(
         followup_module,
         "get_chat_model",
@@ -198,12 +427,7 @@ def test_deepseek_followup_stream_uses_langchain_chat_model(
 def test_deepseek_scoring_uses_langchain_structured_invoke(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    monkeypatch.setattr(
-        scoring_module,
-        "settings",
-        SimpleNamespace(AI_RUNTIME="deepseek"),
-        raising=False,
-    )
+    monkeypatch.setattr(scoring_module, "is_chat_model_enabled", lambda: True, raising=False)
 
     def fake_invoke_structured(*args, **kwargs):
         _prompt, output_model, variables = args

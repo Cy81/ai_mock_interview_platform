@@ -52,12 +52,73 @@ const latestScore = computed(() => {
   const report = latestInterviews.value.find((item) => item.score_report)?.score_report
   return report?.overall_score ? Math.round(report.overall_score) : null
 })
+const readinessItems = computed(() => [
+  {
+    key: 'resume',
+    label: '已上传并解析简历',
+    detail: parsedResumes.value.length
+      ? `可用简历 ${parsedResumes.value.length} 份`
+      : '先上传 PDF、DOCX 或文本简历',
+    done: parsedResumes.value.length > 0,
+  },
+  {
+    key: 'job',
+    label: '已选择目标岗位',
+    detail: selectedJob.value?.title || '选择岗位后，AI 会调整问题方向',
+    done: !!selectedJobCode.value,
+  },
+  {
+    key: 'history',
+    label: '可追踪历史表现',
+    detail: interviews.value.length
+      ? `已有 ${interviews.value.length} 场记录`
+      : '完成第一场后会形成能力曲线',
+    done: interviews.value.length > 0,
+  },
+  {
+    key: 'report',
+    label: '已生成评估报告',
+    detail: completedCount.value
+      ? `已有 ${completedCount.value} 份报告`
+      : '完成全部问题后生成综合报告',
+    done: completedCount.value > 0,
+  },
+])
+const readinessScore = computed(() =>
+  Math.round((readinessItems.value.filter((item) => item.done).length / readinessItems.value.length) * 100),
+)
 const selectedResume = computed(
   () => parsedResumes.value.find((item) => item.id === selectedResumeId.value) || null,
 )
 const selectedJob = computed(
   () => jobs.value.find((item) => item.code === selectedJobCode.value) || null,
 )
+const candidateJourney = computed(() => [
+  {
+    key: 'resume',
+    title: '上传简历',
+    desc: parsedResumes.value.length ? `${parsedResumes.value.length} 份简历可用` : '先上传并完成解析',
+    done: parsedResumes.value.length > 0,
+  },
+  {
+    key: 'job',
+    title: '选择岗位',
+    desc: selectedJob.value?.title || '匹配目标方向',
+    done: !!selectedJobCode.value,
+  },
+  {
+    key: 'interview',
+    title: 'AI 面试',
+    desc: activeCount.value ? `${activeCount.value} 场可继续` : '多轮对话追问',
+    done: activeCount.value > 0,
+  },
+  {
+    key: 'report',
+    title: '查看报告',
+    desc: completedCount.value ? `${completedCount.value} 份报告` : '完成后生成评分',
+    done: completedCount.value > 0,
+  },
+])
 
 function unwrap(resp) {
   if (Array.isArray(resp)) return resp
@@ -133,13 +194,28 @@ onMounted(load)
   <div class="dashboard user-home">
     <el-alert v-if="error" type="error" :title="error" show-icon :closable="false" />
 
+    <section class="candidate-journey" aria-label="候选人面试流程">
+      <article
+        v-for="(step, index) in candidateJourney"
+        :key="step.key"
+        class="journey-step"
+        :class="{ done: step.done }"
+      >
+        <span>{{ index + 1 }}</span>
+        <div>
+          <strong>{{ step.title }}</strong>
+          <small>{{ step.desc }}</small>
+        </div>
+      </article>
+    </section>
+
     <section class="home-hero">
       <div class="hero-copy">
-        <p class="section-kicker">AI MOCK INTERVIEW</p>
-        <h1>面试记录</h1>
+        <p class="section-kicker">CANDIDATE COCKPIT</p>
+        <h1>准备一场真实 AI 面试</h1>
         <p>
-          选择一份已解析简历，匹配目标岗位，直接进入多轮 AI 模拟面试。
-          历史面试、评分报告和继续作答都在这里。
+          从一份简历开始，系统会帮你匹配岗位、组织追问、保存记录并生成评估报告。
+          你只需要选好目标，进入面试房间直接回答。
         </p>
         <div class="hero-stats">
           <span><strong>{{ interviews.length }}</strong> 场面试</span>
@@ -149,7 +225,7 @@ onMounted(load)
         </div>
       </div>
 
-      <div class="resume-start-panel">
+      <div class="resume-start-panel primary-start-card">
         <div class="panel-head">
           <Sparkles :size="18" />
           <strong>开始新面试</strong>
@@ -201,7 +277,7 @@ onMounted(load)
           :disabled="!selectedResumeId || !selectedJobCode"
           @click="startInterview"
         >
-          开启 AI 模拟面试
+          进入面试房间
         </el-button>
         <el-button
           v-if="!parsedResumes.length"
@@ -239,6 +315,35 @@ onMounted(load)
         </span>
         <ArrowRight :size="16" />
       </button>
+    </section>
+
+    <section class="before-interview-panel">
+      <div class="readiness-card">
+        <div>
+          <p class="section-kicker">BEFORE INTERVIEW</p>
+          <h2>开始面试前</h2>
+          <p>系统会根据简历、目标岗位和历史记录组织问题。准备度越高，面试越贴近真实岗位。</p>
+        </div>
+        <div class="readiness-score" :style="{ '--score': readinessScore }">
+          <strong>{{ readinessScore }}</strong>
+          <span>体验准备度</span>
+        </div>
+      </div>
+
+      <div class="readiness-checklist">
+        <div
+          v-for="item in readinessItems"
+          :key="item.key"
+          class="readiness-item"
+          :class="{ done: item.done }"
+        >
+          <span class="readiness-dot">{{ item.done ? '✓' : '' }}</span>
+          <div>
+            <strong>{{ item.label }}</strong>
+            <p>{{ item.detail }}</p>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="interview-records">
@@ -297,6 +402,58 @@ onMounted(load)
   display: flex;
   flex-direction: column;
   gap: 18px;
+}
+
+.candidate-journey {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.journey-step {
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid #dde6f1;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.9);
+}
+
+.journey-step span {
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  color: #64748b;
+  background: #edf2f7;
+  font-size: 12px;
+  font-weight: 900;
+}
+
+.journey-step.done span {
+  color: #fff;
+  background: #0f766e;
+}
+
+.journey-step strong,
+.journey-step small {
+  display: block;
+}
+
+.journey-step strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.journey-step small {
+  margin-top: 4px;
+  color: #6b7b91;
+  font-size: 12px;
 }
 
 .home-hero {
@@ -378,6 +535,14 @@ onMounted(load)
   padding: 22px;
 }
 
+.primary-start-card {
+  border-color: #bad4ff;
+  background:
+    linear-gradient(180deg, #ffffff 0%, #f7fbff 100%),
+    #fff;
+  box-shadow: 0 22px 54px rgba(29, 78, 216, 0.16);
+}
+
 .panel-head {
   display: flex;
   align-items: center;
@@ -410,6 +575,123 @@ onMounted(load)
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 14px;
+}
+
+.before-interview-panel {
+  display: grid;
+  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.05fr);
+  gap: 14px;
+}
+
+.readiness-card,
+.readiness-checklist {
+  border: 1px solid #dde6f1;
+  border-radius: 8px;
+  background: #fff;
+  box-shadow: 0 14px 32px rgba(28, 43, 68, 0.06);
+}
+
+.readiness-card {
+  min-height: 156px;
+  display: grid;
+  grid-template-columns: 1fr auto;
+  align-items: center;
+  gap: 18px;
+  padding: 22px;
+}
+
+.readiness-card h2 {
+  margin: 0;
+  color: #172033;
+  font-size: 22px;
+}
+
+.readiness-card p:not(.section-kicker) {
+  margin: 8px 0 0;
+  color: #5f6f89;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.readiness-score {
+  width: 112px;
+  height: 112px;
+  border: 1px solid #b8cdf0;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-direction: column;
+  color: #1d4ed8;
+  background:
+    radial-gradient(circle at center, #fff 55%, transparent 56%),
+    conic-gradient(#2f7df6 calc(var(--score, 1) * 1%), #e6edf7 0);
+}
+
+.readiness-score strong {
+  font-size: 30px;
+  line-height: 1;
+}
+
+.readiness-score span {
+  margin-top: 6px;
+  color: #64748b;
+  font-size: 12px;
+}
+
+.readiness-checklist {
+  padding: 12px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.readiness-item {
+  min-height: 70px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 12px;
+  border: 1px solid #e3eaf3;
+  border-radius: 8px;
+  background: #f8fbff;
+}
+
+.readiness-item.done {
+  border-color: #b7eadc;
+  background: #f0fdf8;
+}
+
+.readiness-dot {
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #cbd5e1;
+  border-radius: 50%;
+  color: #fff;
+  background: #fff;
+  font-size: 12px;
+  font-weight: 800;
+}
+
+.readiness-item.done .readiness-dot {
+  border-color: #0f766e;
+  background: #0f766e;
+}
+
+.readiness-item strong {
+  color: #172033;
+  font-size: 13px;
+}
+
+.readiness-item p {
+  margin: 4px 0 0;
+  color: #6b7b91;
+  font-size: 12px;
+  line-height: 1.5;
 }
 
 .lane {
@@ -581,7 +863,9 @@ onMounted(load)
 
 @media (max-width: 980px) {
   .home-hero,
-  .quick-lanes {
+  .quick-lanes,
+  .before-interview-panel,
+  .candidate-journey {
     grid-template-columns: 1fr;
   }
 }
@@ -603,6 +887,11 @@ onMounted(load)
 
   .record-side {
     justify-content: space-between;
+  }
+
+  .readiness-card,
+  .readiness-checklist {
+    grid-template-columns: 1fr;
   }
 }
 </style>
