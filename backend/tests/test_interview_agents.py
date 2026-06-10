@@ -312,6 +312,52 @@ def test_question_generation_uses_active_ai_config_when_env_runtime_is_mock(
     assert questions[0]["question"] == "请说明 FastAPI 依赖注入的生产实践。"
 
 
+def test_question_generation_accepts_plan_json_string_from_planner(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(question_generator, "is_chat_model_enabled", lambda: True, raising=False)
+    plan = InterviewPlan(
+        target_type="formal",
+        difficulty="intermediate",
+        core_skills=["FastAPI"],
+    )
+
+    def fake_invoke_structured(*args, **kwargs):
+        _prompt, output_model, variables = args
+        assert output_model is QuestionGenerationResult
+        assert variables["plan"] == plan.model_dump_json()
+        return (
+            QuestionGenerationResult(
+                plan=plan,
+                questions=[
+                    GeneratedQuestion(
+                        position=1,
+                        type="technical",
+                        difficulty="intermediate",
+                        skill="FastAPI",
+                        question="请说明 FastAPI 依赖注入的生产实践。",
+                        rubric=["解释原理", "结合项目"],
+                    )
+                ],
+            ),
+            LLMResponse(content="[admin-configured]", model="admin-model"),
+        )
+
+    monkeypatch.setattr(question_generator, "invoke_structured", fake_invoke_structured)
+
+    questions, meta = QuestionGenerationAgent().generate(
+        plan=plan.model_dump_json(),
+        job_title="AI 应用工程师",
+        job_competency={"skills": ["FastAPI"]},
+        profile={"years": 2, "skills": ["FastAPI"]},
+        contexts=[],
+        count=1,
+    )
+
+    assert meta.model == "admin-model"
+    assert questions[0]["question"] == "请说明 FastAPI 依赖注入的生产实践。"
+
+
 def test_followup_stream_uses_active_ai_config_when_env_runtime_is_mock(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

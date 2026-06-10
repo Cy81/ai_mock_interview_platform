@@ -18,13 +18,14 @@ class QuestionGenerationAgent:
     def generate(
         self,
         *,
-        plan: InterviewPlan,
+        plan: InterviewPlan | dict[str, Any] | str,
         job_title: str,
         job_competency: dict[str, Any],
         profile: dict[str, Any],
         contexts: list[dict[str, Any]],
         count: int,
     ) -> tuple[list[dict[str, Any]], LLMResponse]:
+        plan = _coerce_plan(plan)
         if not is_chat_model_enabled():
             return self._mock_generate(plan=plan, profile=profile, contexts=contexts, count=count)
 
@@ -210,6 +211,17 @@ def _profile_skills(profile: dict[str, Any]) -> list[str]:
     if not isinstance(skills, list):
         return []
     return [str(skill).strip() for skill in skills if str(skill).strip()]
+
+
+def _coerce_plan(plan: InterviewPlan | dict[str, Any] | str) -> InterviewPlan:
+    if isinstance(plan, InterviewPlan):
+        return plan
+    try:
+        if isinstance(plan, str):
+            return InterviewPlan.model_validate_json(plan)
+        return InterviewPlan.model_validate(plan)
+    except Exception as exc:
+        raise ValueError("AI 面试计划格式错误，无法生成面试题") from exc
 
 
 def _context_ids(contexts: list[dict[str, Any]]) -> list[int]:
