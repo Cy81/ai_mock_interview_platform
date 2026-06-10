@@ -98,9 +98,10 @@ def create_interview(
     contexts = search(db, "question_bank", query, top_k=8)
     context_payload = [c.to_context() for c in contexts]
 
+    ai_config = get_effective_config(db)
     try:
         try:
-            with use_ai_config(get_effective_config(db)):
+            with use_ai_config(ai_config):
                 questions, meta = get_interview_agent_runtime().generate_interview_questions(
                     job_title=job.title,
                     job_competency=job.competency_model,
@@ -111,6 +112,17 @@ def create_interview(
             if not questions:
                 raise DomainError("AI 未返回任何题目，请稍后重试")
         except Exception as exc:
+            if not _allow_local_ai_fallback(ai_config):
+                logger.exception(
+                    "interview_ai_question_generation_failed",
+                    interview_id=interview.id,
+                    error=str(exc)[:500],
+                )
+                raise DomainError(
+                    f"AI 出题失败：{_ai_error_message(exc)}",
+                    status_code=502,
+                    code="AI_UPSTREAM_ERROR",
+                ) from exc
             logger.exception(
                 "interview_ai_question_generation_failed_fallback",
                 interview_id=interview.id,
@@ -284,8 +296,9 @@ def submit_interview_turn(
     contexts = search(db, "question_bank", query, top_k=6)
     next_position = max(q.position for q in questions) + 1
     context_payload = [context.to_context() for context in contexts]
+    ai_config = get_effective_config(db)
     try:
-        with use_ai_config(get_effective_config(db)):
+        with use_ai_config(ai_config):
             raw_question, meta = get_interview_agent_runtime().generate_next_question(
                 job_title=interview.job_title,
                 job_competency=job_competency,
@@ -300,6 +313,19 @@ def submit_interview_turn(
         if not raw_question or not str(raw_question.get("question") or "").strip():
             raise DomainError("AI 未返回有效追问题目，请稍后重试")
     except Exception as exc:
+        if not _allow_local_ai_fallback(ai_config):
+            logger.exception(
+                "interview_ai_next_question_generation_failed",
+                interview_id=interview.id,
+                question_id=current_question.id,
+                next_position=next_position,
+                error=str(exc)[:500],
+            )
+            raise DomainError(
+                f"AI 追问生成失败：{_ai_error_message(exc)}",
+                status_code=502,
+                code="AI_UPSTREAM_ERROR",
+            ) from exc
         logger.exception(
             "interview_ai_next_question_generation_failed_fallback",
             interview_id=interview.id,
@@ -380,8 +406,9 @@ def finish_interview(db: Session, user: User, interview_id: int) -> Interview:
 
     try:
         knowledge_payload = [h.to_context() for h in knowledge_hits]
+        ai_config = get_effective_config(db)
         try:
-            with use_ai_config(get_effective_config(db)):
+            with use_ai_config(ai_config):
                 report, meta = get_interview_agent_runtime().score_interview(
                     job_title=interview.job_title,
                     profile=profile,
@@ -389,6 +416,17 @@ def finish_interview(db: Session, user: User, interview_id: int) -> Interview:
                     knowledge_contexts=knowledge_payload,
                 )
         except Exception as exc:
+            if not _allow_local_ai_fallback(ai_config):
+                logger.exception(
+                    "interview_ai_scoring_failed",
+                    interview_id=interview.id,
+                    error=str(exc)[:500],
+                )
+                raise DomainError(
+                    f"AI 评分失败：{_ai_error_message(exc)}",
+                    status_code=502,
+                    code="AI_UPSTREAM_ERROR",
+                ) from exc
             logger.exception(
                 "interview_ai_scoring_failed_fallback",
                 interview_id=interview.id,
@@ -628,6 +666,21 @@ def _job_competency_skills(job_competency: dict[str, Any]) -> list[str]:
         elif isinstance(value, dict):
             skills.extend(_job_competency_skills(value))
     return [skill.strip() for skill in skills if skill.strip()]
+
+
+def _allow_local_ai_fallback(config: Any) -> bool:
+    runtime = _config_value(getattr(config, "runtime", "mock"))
+    provider = _config_value(getattr(config, "provider", "mock"))
+    return runtime == "mock" or provider == "mock"
+
+
+def _config_value(value: Any) -> str:
+    return value.value if hasattr(value, "value") else str(value)
+
+
+def _ai_error_message(exc: Exception) -> str:
+    message = str(exc).strip() or exc.__class__.__name__
+    return message[:300]
 
 
 def _fallback_question_text(

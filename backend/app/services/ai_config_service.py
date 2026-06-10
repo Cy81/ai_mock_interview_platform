@@ -288,3 +288,16 @@ def build_openai_extra_body(config: EffectiveAIConfig) -> dict[str, str]:
 
 def build_openai_default_headers() -> dict[str, str]:
     return {"User-Agent": "Mozilla/5.0"}
+
+
+def normalize_openai_base_url(base_url: str) -> str:
+    clean = (base_url or "").strip().rstrip("/")
+    for suffix in ("/chat/completions", "/responses"):
+        if clean.endswith(suffix):
+            return clean[: -len(suffix)].rstrip("/")
+    return clean
+
+
+def build_openai_responses_url(base_url: str) -> str:
+    root = normalize_openai_base_url(base_url)
+    return f"{root}/responses"

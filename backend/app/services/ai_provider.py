@@ -31,7 +31,9 @@ from app.services.ai_config_service import (
     EffectiveAIConfig,
     build_openai_default_headers,
     build_openai_extra_body,
+    build_openai_responses_url,
     get_effective_config,
+    normalize_openai_base_url,
 )
 
 
@@ -115,22 +117,26 @@ class DeepSeekProvider(AIProvider):
         self.config = config or _load_effective_config()
         if not self.config.api_key:
             raise RuntimeError("DEEPSEEK_API_KEY 未配置")
+        timeout = httpx.Timeout(
+            connect=10.0,
+            read=self.config.timeout,
+            write=10.0,
+            pool=5.0,
+        )
         self.client = OpenAI(
             api_key=self.config.api_key,
-            base_url=self.config.base_url,
+            base_url=normalize_openai_base_url(self.config.base_url),
             default_headers=build_openai_default_headers(),
-            timeout=httpx.Timeout(
-                connect=10.0,
-                read=self.config.timeout,
-                write=10.0,
-                pool=5.0,
-            ),
+            timeout=timeout,
             max_retries=0,  # 重试交给 tenacity，行为可控
         )
+        self.http_client = httpx.Client(timeout=timeout)
         self.model = self.config.model
         self.temperature = self.config.temperature
         self.max_tokens = self.config.max_tokens
         self.max_retries = max(1, self.config.max_retries)
+        self.wire_api = _wire_api_value(self.config)
+        self.responses_url = build_openai_responses_url(self.config.base_url)
         self.extra_body = build_openai_extra_body(self.config)
 
     # ---------- 基础调用 ----------
@@ -144,6 +150,15 @@ class DeepSeekProvider(AIProvider):
         max_tokens: int | None = None,
         stream: bool = False,
     ):
+        if self.wire_api == AIWireAPI.RESPONSES.value and not stream:
+            return self._invoke_responses(
+                system,
+                user,
+                json_mode=json_mode,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+
         kwargs: dict[str, Any] = {
             "model": self.model,
             "messages": [
@@ -161,6 +176,47 @@ class DeepSeekProvider(AIProvider):
             kwargs["stream"] = True
             kwargs["stream_options"] = {"include_usage": True}
         return self.client.chat.completions.create(**kwargs)
+
+    def _invoke_responses(
+        self,
+        system: str,
+        user: str,
+        *,
+        json_mode: bool,
+        temperature: float | None,
+        max_tokens: int | None,
+    ) -> dict[str, Any]:
+        payload: dict[str, Any] = {
+            "model": self.model,
+            "input": [
+                {
+                    "role": "system",
+                    "content": [{"type": "input_text", "text": system}],
+                },
+                {
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": user}],
+                },
+            ],
+            "temperature": self.temperature if temperature is None else temperature,
+            "max_output_tokens": self.max_tokens if max_tokens is None else max_tokens,
+        }
+        if json_mode:
+            payload["text"] = {"format": {"type": "json_object"}}
+        response = self.http_client.post(
+            self.responses_url,
+            json=payload,
+            headers={
+                **build_openai_default_headers(),
+                "Authorization": f"Bearer {self.config.api_key}",
+                "Content-Type": "application/json",
+            },
+        )
+        response.raise_for_status()
+        data = response.json()
+        if not isinstance(data, dict):
+            raise RuntimeError("Responses API returned non-object payload")
+        return data
 
     def chat_json(
         self,

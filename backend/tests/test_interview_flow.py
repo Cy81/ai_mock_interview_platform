@@ -210,6 +210,82 @@ def test_create_interview_falls_back_when_ai_generation_fails(
     assert all(question["rubric"] for question in interview["questions"])
 
 
+def test_create_interview_reports_ai_error_in_real_runtime(
+    client: TestClient,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    import app.services.interview_service as interview_service
+    from app.models.ai_config import AIProvider, AIRuntime, AIWireAPI
+    from app.services.ai_config_service import EffectiveAIConfig
+
+    real_config = EffectiveAIConfig(
+        id=1,
+        name="DeepSeek",
+        runtime=AIRuntime.DEEPSEEK,
+        provider=AIProvider.DEEPSEEK,
+        base_url="https://api.deepseek.com",
+        api_key="sk-test",
+        model="deepseek-chat",
+        wire_api=AIWireAPI.CHAT_COMPLETIONS,
+        temperature=0.2,
+        max_tokens=2048,
+        timeout=60,
+        max_retries=0,
+    )
+
+    class FailingRuntime:
+        def generate_interview_questions(self, **kwargs):
+            raise RuntimeError("upstream model request failed")
+
+    monkeypatch.setattr(
+        interview_service,
+        "get_effective_config",
+        lambda db=None: real_config,
+    )
+    monkeypatch.setattr(
+        interview_service,
+        "get_interview_agent_runtime",
+        lambda: FailingRuntime(),
+    )
+
+    resume_response = client.post(
+        "/api/v1/resumes",
+        headers=auth_headers,
+        json={
+            "filename": "real-runtime-error-resume.txt",
+            "target_position": "AI 应用工程师",
+            "text": "姓名：李雷\n3年 Python FastAPI RAG LangChain Docker 项目经验。",
+        },
+    )
+    assert resume_response.status_code == 201, resume_response.text
+    resume = resume_response.json()
+
+    recommend_response = client.post(
+        "/api/v1/jobs/recommend",
+        headers=auth_headers,
+        json={"resume_id": resume["id"], "top_n": 1},
+    )
+    assert recommend_response.status_code == 200, recommend_response.text
+    job = recommend_response.json()["recommendations"][0]
+
+    interview_response = client.post(
+        "/api/v1/interviews",
+        headers=auth_headers,
+        json={
+            "resume_id": resume["id"],
+            "job_code": job["code"],
+            "question_count": 2,
+            "idempotency_key": "real-runtime-ai-error",
+        },
+    )
+
+    assert interview_response.status_code == 502, interview_response.text
+    payload = interview_response.json()
+    assert payload["code"] == "AI_UPSTREAM_ERROR"
+    assert "AI 出题失败" in payload["detail"]
+
+
 def test_interview_turn_falls_back_when_next_question_generation_fails(
     client: TestClient,
     auth_headers: dict[str, str],

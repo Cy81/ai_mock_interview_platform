@@ -36,6 +36,26 @@ class ProbeResult(BaseModel):
     answer: str
 
 
+@pytest.fixture(autouse=True)
+def _mock_agent_ai_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        agent_llm,
+        "get_effective_config",
+        lambda: SimpleNamespace(
+            runtime=AIRuntime.MOCK,
+            provider=AIProvider.MOCK,
+            base_url="",
+            api_key="",
+            model="mock-interview",
+            wire_api="chat_completions",
+            temperature=0.2,
+            timeout=60,
+            max_tokens=2048,
+            max_retries=0,
+        ),
+    )
+
+
 def test_mock_runtime_generates_questions_with_langchain_facade() -> None:
     runtime = get_interview_agent_runtime()
     questions, meta = runtime.generate_interview_questions(

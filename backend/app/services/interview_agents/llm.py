@@ -18,6 +18,7 @@ from app.services.ai_config_service import (
     build_openai_default_headers,
     build_openai_extra_body,
     get_effective_config,
+    normalize_openai_base_url,
 )
 from app.services import ai_usage_service
 
@@ -50,7 +51,7 @@ def get_chat_model() -> Any | None:
 
     kwargs = {
         "api_key": config.api_key,
-        "base_url": config.base_url,
+        "base_url": normalize_openai_base_url(config.base_url),
         "model": config.model,
         "temperature": config.temperature,
         "timeout": config.timeout,
